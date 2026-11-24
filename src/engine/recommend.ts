@@ -1,4 +1,4 @@
-import type { AppState, Card, PaymentInput, PromoRule, Transaction, Verification } from '../types';
+import type { AppState, Card, PaymentInput, PerkVerification, PromoRule, Transaction, Verification } from '../types';
 import {
   capKrwOf,
   estimateGatedMonthlyValue,
@@ -15,6 +15,7 @@ import {
   performanceStatus,
 } from './performance';
 import { monthKeyOf, todayISO, toMonthKey } from './date';
+import { promoActive } from './perks';
 
 export interface BenefitLine {
   label: string;
@@ -38,7 +39,7 @@ export interface PromoEvaluation {
   enrolled: boolean;
   expiresAt: string;
   note?: string;
-  verification: Verification;
+  verification: PerkVerification;
 }
 
 export interface PaymentPerformance {
@@ -105,7 +106,7 @@ function promoProgress(card: Card, promo: PromoRule, transactions: Transaction[]
 }
 
 function evaluatePromo(card: Card, input: PaymentInput, transactions: Transaction[], today: Date): PromoEvaluation | undefined {
-  const promo = card.promos.find((p) => p.categories.includes(input.category));
+  const promo = card.promos.find((p) => promoActive(p, today) && p.categories.includes(input.category));
   if (!promo) return undefined;
   const before = promoProgress(card, promo, transactions, today);
   const after = before + input.amount;

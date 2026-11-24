@@ -4,6 +4,7 @@ import { dDay, monthProgress, todayISO, toMonthKey } from './date';
 import { estimateGatedMonthlyValue, capKrwOf, rateOfRule } from './benefits';
 import { currentMonthSpend, prevMonthSpend } from './performance';
 import { recommendPayment, simulateSplit, sumUsageKrw } from './recommend';
+import { activePromos, findMerchantPerkHits, LAYER_LABEL, type MerchantPerkHit } from './perks';
 
 export interface AssistantAnswer {
   intent: string;
@@ -54,7 +55,16 @@ const MERCHANT_HINTS: { keys: string[]; hint: MerchantHint }[] = [
       category: 'general',
       label: '영화·문화',
       defaultAmount: 30_000,
-      note: '영화관은 카드사 업종상 문화/일반 가맹점이라 전용 혜택이 거의 없습니다.',
+      note: '영화관은 업종상 문화/일반으로 분류되어 업종 적립은 낮지만, CGV·롯데시네마·메가박스 전용 할인이 있는 카드는 위에 표시됩니다.',
+    },
+  },
+  {
+    keys: ['공항 라운지', '라운지', 'priority pass', 'pp카드', 'the lounge', '센츄리온'],
+    hint: {
+      category: 'general',
+      label: '공항 라운지',
+      defaultAmount: 0,
+      note: '라운지는 결제금액과 무관하게 이용 횟수·동반인 조건으로 비교합니다.',
     },
   },
   {
@@ -339,16 +349,13 @@ function simplePayTip(state: AppState): string[] {
 }
 
 function placeAnswer(state: AppState, question: string, hint: MerchantHint, today: Date): AssistantAnswer {
-  const parsed = parseAmount(question);
-  const amount = parsed ?? hint.defaultAmount;
-  const header = `"${hint.label}" ${man(amount)} 결제 기준 비교입니다.${parsed ? '' : ` (금액을 말하지 않아 ${man(amount)}으로 계산)`}`;
-
   if (hint.category === 'tax') {
+    const amount = parseAmount(question) ?? hint.defaultAmount;
     return taxAnswer(state, amount, today);
   }
 
-  const text = recommendText(state, hint.category, amount, question, today, header);
-  const lines = [text];
+  const answer = merchantAnswer(state, question, hint, today);
+  const lines = [answer.text];
   if (hint.note) {
     lines.push('');
     lines.push(`※ ${hint.note}`);
@@ -364,6 +371,160 @@ function placeAnswer(state: AppState, question: string, hint: MerchantHint, toda
     lines.push('');
     lines.push('※ 교통카드 충전·고속버스는 카드에 따라 실적·적립에서 빠집니다(특히 우리 ALL은 충전 금액 제외).');
   }
+  return { ...answer, intent: 'place', text: lines.join('\n') };
+}
+
+/**
+ * 가맹점·브랜드 질문 전용 답변.
+ * ① 가맹점 직접 혜택 → ② 네트워크·카드사 혜택 → ③ 업종 카테고리 혜택 → ④ 기본 적립 순으로 보여 준다.
+ * 각 카드마다 왜 유리한지(혜택명·할인/적립률·한도·필요 실적)를 한 줄씩 붙인다.
+ */
+function merchantAnswer(state: AppState, question: string, hint: MerchantHint, today: Date): AssistantAnswer {
+  const parsed = parseAmount(question);
+  const amount = parsed ?? hint.defaultAmount;
+  const prevOf = (card: (typeof state.cards)[number]) => prevMonthSpend(card, state.transactions, today);
+  const hits = findMerchantPerkHits(state.cards, question, hint.category, amount, prevOf);
+  const results = recommendPayment(state, { amount, category: hint.category, merchant: question }, today);
+
+  interface Row {
+    card: (typeof state.cards)[number];
+    tier: 0 | 1 | 2 | 3;
+    score: number;
+    reason: string;
+    detail: string;
+    source: string;
+    warning?: string;
+    promo?: string;
+  }
+
+  const rows: Row[] = [];
+  for (const card of state.cards) {
+    const rec = results.find((r) => r.cardId === card.id);
+    const direct = hits.find((h) => h.card.id === card.id && h.tier === 0);
+    const layered = hits.find((h) => h.card.id === card.id && h.tier === 1);
+    const promos = activePromos(card, today).filter((p) => p.categories.includes(hint.category));
+    const promoLine = promos.length > 0
+      ? `이벤트(기간 한정): ${promos[0].label}${promos[0].rewardKrw ? ` — 조건 충족 시 ${won(promos[0].rewardKrw)}` : ''} (~${promos[0].expiresAt})`
+      : undefined;
+
+    const buildPerkRow = (hit: MerchantPerkHit, tier: 0 | 1): Row => {
+      const { perk } = hit;
+      const valueText = hit.valueKrw > 0 ? `약 ${won(hit.valueKrw)}` : perk.valueText ?? '금액화 어려움';
+      const bits = [perk.summary];
+      if (perk.valueText && hit.valueKrw > 0) bits.push(perk.valueText);
+      if (perk.conditions) bits.push(perk.conditions);
+      const warning = hit.shortfallKrw > 0
+        ? `전월 ${man(perk.minPrevMonth ?? 0)} 미달이면 이 혜택은 적용되지 않습니다(현재 ${man(Math.max(0, (perk.minPrevMonth ?? 0) - hit.shortfallKrw))}).`
+        : undefined;
+      const dupNote = perk.dedupeKey && hits.some((h) => h !== hit && h.card.id === card.id && h.perk.dedupeKey === perk.dedupeKey && h.tier !== hit.tier)
+        ? ' (다른 계층의 같은 혜택은 통합해 하나만 적용)'
+        : '';
+      return {
+        card,
+        tier,
+        score: hit.valueKrw + (perk.kind === 'access' || perk.kind === 'free' || perk.kind === 'status' ? 1 : 0),
+        reason: `${perk.label} — ${valueText}`,
+        detail: bits.join(' · ') + dupNote,
+        source: LAYER_LABEL[perk.layer],
+        warning,
+        promo: promoLine,
+      };
+    };
+
+    if (direct) {
+      rows.push(buildPerkRow(direct, 0));
+      continue;
+    }
+    if (layered) {
+      rows.push(buildPerkRow(layered, 1));
+      continue;
+    }
+    if (rec && rec.immediateKrw > 0) {
+      const m = rec.performance.met;
+      rows.push({
+        card,
+        tier: 2,
+        score: rec.immediateKrw,
+        reason: `${rec.bestLabel} — 약 ${won(rec.immediateKrw)}`,
+        detail: `${(rec.bestRatePercent).toFixed(2)}% · ${rec.performance.threshold === 0 ? '전월 실적 조건 없음' : `전월 ${man(rec.performance.threshold)}${m ? ' 충족' : ' 미달'}`}`,
+        source: '카드',
+        warning: !m ? `전월 ${man(rec.performance.threshold)} 미달이면 이 혜택은 적용되지 않습니다.` : undefined,
+        promo: promoLine,
+      });
+      continue;
+    }
+    const fallbackRate = Math.max(
+      0,
+      ...card.benefits
+        .filter((b) => b.categories.includes(hint.category))
+        .map((b) => (b.earnType === 'percent' ? (b.percent ?? 0) / 100 : 0)),
+    );
+    if (fallbackRate > 0) {
+      rows.push({
+        card,
+        tier: 3,
+        score: fallbackRate * 100,
+        reason: `기본 적립 ${(fallbackRate * 100).toFixed(2)}%`,
+        detail: `${man(amount)} 결제 시 약 ${won(amount * fallbackRate)}${rec && !rec.performance.met && rec.performance.threshold > 0 ? ` · 전월 ${man(rec.performance.threshold)} 필요` : ''}`,
+        source: '카드',
+        warning: rec && !rec.performance.met && rec.performance.threshold > 0 ? `전월 ${man(rec.performance.threshold)} 미달이면 기본 적립이 적용되지 않을 수 있습니다.` : undefined,
+        promo: promoLine,
+      });
+      continue;
+    }
+    rows.push({
+      card,
+      tier: 3,
+      score: 0,
+      reason: '이 업종 혜택 없음',
+      detail: '실적·한도만 확인하세요.',
+      source: '카드',
+      promo: promoLine,
+    });
+  }
+
+  rows.sort((a, b) => (a.tier !== b.tier ? a.tier - b.tier : b.score - a.score));
+  rows.forEach((r) => {
+    r.warning = r.warning ?? undefined;
+  });
+
+  const tier0 = rows.filter((r) => r.tier === 0);
+  const tier1 = rows.filter((r) => r.tier === 1);
+  const tier2 = rows.filter((r) => r.tier === 2);
+  const tier3 = rows.filter((r) => r.tier === 3 && r.score > 0);
+
+  const lines: string[] = [
+    `"${hint.label}" ${man(amount)} 결제 기준입니다.${parsed ? '' : ` (금액을 말하지 않아 ${man(amount)}으로 계산)`}`,
+    '',
+  ];
+
+  if (tier0.length === 0) {
+    lines.push(`전용 혜택 없음 — "${hint.label}"에 직접 적용되는 가맹점 혜택이 확인되지 않았습니다.`);
+    lines.push('대신 업종·기본 적립 기준으로 아래 카드가 낫습니다.');
+    lines.push('');
+  }
+
+  const section = (title: string, list: Row[], limit: number) => {
+    if (list.length === 0) return;
+    lines.push(title);
+    list.slice(0, limit).forEach((r, i) => {
+      lines.push(`${i + 1}) ${r.card.shortName} — ${r.reason}  [${r.source}]`);
+      if (r.detail) lines.push(`   · ${r.detail}`);
+      if (r.warning) lines.push(`   · ⚠ ${r.warning}`);
+      if (r.promo) lines.push(`   · ${r.promo}`);
+    });
+    if (list.length > limit) lines.push(`   외 ${list.length - limit}개 카드는 카드 탭에서 확인할 수 있습니다.`);
+    lines.push('');
+  };
+
+  section('① 가맹점 직접 혜택이 있는 카드', tier0, 4);
+  section('② 네트워크·카드사 혜택이 있는 카드', tier1, 3);
+  section('③ 업종 혜택 기준', tier2, 3);
+  section('④ 기본 적립 기준', tier3, 2);
+
+  lines.push('※ 출처 라벨: [네트워크]=브랜드사, [카드사]=발급사 선택서비스, [카드]=상품 고유 혜택, [가맹점]=특정 가맹점 혜택, [직접 추가]=내가 등록한 혜택.');
+  lines.push('※ 라운지·발렛처럼 횟수로 주는 혜택은 금액화하지 않고 순서만 위에 두었습니다. 예시 데이터가 있으면 ⚠표시와 함께 카드사 공식 약관을 확인하세요.');
+
   return {
     intent: 'place',
     text: lines.join('\n'),
@@ -496,6 +657,8 @@ export const ASSISTANT_SUGGESTIONS = [
   '지방세 내기 좋을 카드',
   'CGV 결제에 유리한 카드',
   '스타벅스 카드 추천',
+  '면세점 결제 유리한 카드',
+  '공항 라운지 되는 카드',
   '해외에서 어떤 카드를 써야 하나요?',
   '100만 원 분할 결제 유리한가?',
   '연회비 대비 효율이 가장 낮은 카드는?',

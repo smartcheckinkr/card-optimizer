@@ -10,6 +10,7 @@ import { formatWon, parseAmountInput } from '../lib/format';
 import { formatDate, todayISO } from '../engine/date';
 import { Badge, Field, Panel, Progress, SectionTitle, Sheet, VerifyBadge, btnGhost, btnPrimary, btnSubtle, inputClass, selectClass } from '../components/ui';
 import { CardFace } from '../components/CardFace';
+import { PerkItem, PromoSection, UserPerkSection } from '../components/PerkSection';
 
 const emptyCard = (): Card => ({
   id: `card-${Date.now().toString(36)}`,
@@ -21,6 +22,10 @@ const emptyCard = (): Card => ({
   annualFee: 0,
   performance: { prevThreshold: 0, minPerTransaction: 0, excludedCategories: [], excludedKeywords: [] },
   benefits: [],
+  networkPerks: [],
+  issuerPerks: [],
+  merchantPerks: [],
+  userPerks: [],
   promos: [],
   manual: { prevMonthAdjustment: 0, currentMonthAdjustment: 0 },
   usage: {},
@@ -217,22 +222,41 @@ function CategoryMulti({ value, onChange, tone = 'ink' }: { value: CategoryId[];
 }
 
 /** 키워드를 칩으로 보여 주고 ×로 지우거나 입력해서 더한다(쉼표 없이도 입력 가능). */
+/** 자주 보는 실적·적립 제외 가맹점 키워드 — 탭하면 위 칸으로 올라가고, 한 번 더 탭하면 빠집니다. */
+const SUGGESTED_KEYWORDS = [
+  '아파트관리비',
+  '임대료',
+  '등록금',
+  '상품권',
+  '기프트카드',
+  '선불카드',
+  '교통카드 충전',
+  '고속버스',
+  '무이자할부',
+  '4대보험',
+  '정부지원금',
+];
+
 function KeywordChips({
   value,
   onChange,
   placeholder,
+  suggestions = SUGGESTED_KEYWORDS,
 }: {
   value: string[];
   onChange: (next: string[]) => void;
   placeholder?: string;
+  suggestions?: string[];
 }) {
   const [text, setText] = useState('');
+  const [open, setOpen] = useState(false);
   const add = () => {
     const v = text.trim();
     if (!v) return;
     if (!value.includes(v)) onChange([...value, v]);
     setText('');
   };
+  const remaining = suggestions.filter((k) => !value.includes(k));
   return (
     <div className="rounded-xl bg-slate-50 p-2 ring-1 ring-slate-200">
       <div className="flex flex-wrap gap-1">
@@ -263,6 +287,32 @@ function KeywordChips({
           추가
         </button>
       </div>
+      {remaining.length > 0 && (
+        <div className="mt-1.5 border-t border-slate-200 pt-1.5">
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            className="text-[10px] font-medium text-slate-500"
+          >
+            자주 쓰는 키워드 {open ? '접기' : '보기'}
+          </button>
+          {open && (
+            <div className="mt-1 flex flex-wrap gap-1">
+              {remaining.map((k) => (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => onChange([...value, k])}
+                  className="inline-flex items-center gap-0.5 rounded-md bg-white px-1.5 py-0.5 text-[10.5px] text-slate-500 ring-1 ring-slate-200"
+                >
+                  <span className="text-indigo-500">+</span>
+                  {k}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -283,6 +333,7 @@ function CardEditor({ card, onClose }: { card: Card; onClose: () => void }) {
 
   useEffect(() => setDraft(card), [card]);
 
+  const today = useMemo(() => new Date(), []);
   const patch = (p: Partial<Card>) => setDraft((d) => ({ ...d, ...p }));
 
   const pickCatalog = (entry: CatalogCard) => {
@@ -466,6 +517,20 @@ function CardEditor({ card, onClose }: { card: Card; onClose: () => void }) {
             />
           </Field>
         </div>
+        <div className="rounded-xl bg-slate-50 p-2.5 ring-1 ring-slate-200">
+          <p className="text-[10.5px] font-semibold text-slate-600">
+            실적 제외 합계 — 업종 {(draft.performance.excludedCategories ?? []).length}개 · 가맹점 키워드{' '}
+            {(draft.performance.excludedKeywords ?? []).length}개
+          </p>
+          <p className="mt-0.5 text-[10px] leading-relaxed text-slate-500">
+            {(draft.performance.excludedCategories ?? []).length + (draft.performance.excludedKeywords ?? []).length === 0
+              ? '제외 대상 없음'
+              : [
+                  ...(draft.performance.excludedCategories ?? []).map((c) => CATEGORY_LABEL[c]),
+                  ...(draft.performance.excludedKeywords ?? []),
+                ].join(' · ')}
+          </p>
+        </div>
         <Field label="실적 제외 업종" hint="이 업종 결제는 전월 실적에 안 들어갑니다">
           <CategoryMulti value={draft.performance.excludedCategories} onChange={(v) => patch({ performance: { ...draft.performance, excludedCategories: v } })} />
         </Field>
@@ -480,6 +545,15 @@ function CardEditor({ card, onClose }: { card: Card; onClose: () => void }) {
           <p className="text-[10.5px] font-semibold text-rose-700">적립·할인 제외 (실적에는 들어가도 혜택은 없음)</p>
           <p className="mt-0.5 text-[9.5px] leading-relaxed text-rose-500/80">
             세금·공과금처럼 실적에는 잡히지만 적립은 안 붙는 결제를 여기에 둡니다.
+          </p>
+          <p className="mt-1 text-[9.5px] leading-relaxed text-rose-600/70">
+            제외 합계 —{' '}
+            {(draft.benefitExclusions?.categories ?? []).length + (draft.benefitExclusions?.keywords ?? []).length === 0
+              ? '없음'
+              : [
+                  ...(draft.benefitExclusions?.categories ?? []).map((c) => CATEGORY_LABEL[c]),
+                  ...(draft.benefitExclusions?.keywords ?? []),
+                ].join(' · ')}
           </p>
           <div className="mt-2 space-y-2">
             <CategoryMulti
@@ -583,30 +657,47 @@ function CardEditor({ card, onClose }: { card: Card; onClose: () => void }) {
         {draft.benefits.length === 0 && !newRule && <p className="text-[11px] text-slate-400">혜택을 추가하면 이 카드도 추천 계산에 반영됩니다.</p>}
       </Panel>
 
-      {draft.promos.length > 0 && (
+      {(draft.networkPerks?.length ?? 0) > 0 && (
         <Panel className="space-y-2">
-          <p className="text-[12.5px] font-bold text-ink">이벤트</p>
-          {draft.promos.map((promo) => (
-            <label key={promo.id} className="flex items-start justify-between gap-2 rounded-xl bg-slate-50 p-2.5">
-              <span className="min-w-0">
-                <span className="block text-[11.5px] font-medium text-slate-700">{promo.label}</span>
-                <span className="block text-[10px] text-slate-400">
-                  {formatWon(promo.minSpend)} 이상 · {formatWon(promo.rewardKrw)} · ~{promo.expiresAt}
-                </span>
-              </span>
-              <input
-                type="checkbox"
-                checked={promo.enrolled}
-                onChange={(e) =>
-                  patch({ promos: draft.promos.map((p) => (p.id === promo.id ? { ...p, enrolled: e.target.checked } : p)) })
-                }
-                className="mt-1 h-4 w-4 accent-indigo-600"
-              />
-            </label>
+          <p className="text-[12.5px] font-bold text-ink">
+            브랜드(네트워크) 혜택 {draft.networkPerks!.length}개
+          </p>
+          <p className="text-[10px] leading-relaxed text-slate-400">
+            {draft.network} {draft.networkTier ? `${draft.networkTier} 등급` : ''} 공통 혜택입니다. 카드 고유 혜택과 같은 항목은 하나만 적용됩니다.
+          </p>
+          {draft.networkPerks!.map((perk) => (
+            <PerkItem key={perk.id} perk={perk} />
           ))}
-          <p className="text-[10px] text-slate-400">체크 = 응모 완료. 이벤트 혜택은 즉시 혜택과 분리해 표시됩니다.</p>
         </Panel>
       )}
+
+      {(draft.issuerPerks?.length ?? 0) > 0 && (
+        <Panel className="space-y-2">
+          <p className="text-[12.5px] font-bold text-ink">카드사 혜택 {draft.issuerPerks!.length}개</p>
+          <p className="text-[10px] leading-relaxed text-slate-400">카드사가 이 상품에 제공하는 선택서비스입니다.</p>
+          {draft.issuerPerks!.map((perk) => (
+            <PerkItem key={perk.id} perk={perk} />
+          ))}
+        </Panel>
+      )}
+
+      {(draft.merchantPerks?.length ?? 0) > 0 && (
+        <Panel className="space-y-2">
+          <p className="text-[12.5px] font-bold text-ink">카드 고유·가맹점 혜택 {draft.merchantPerks!.length}개</p>
+          <p className="text-[10px] leading-relaxed text-slate-400">라운지·발렛·특정 가맹점 할인처럼 이 카드에만 있는 혜택입니다.</p>
+          {draft.merchantPerks!.map((perk) => (
+            <PerkItem key={perk.id} perk={perk} />
+          ))}
+        </Panel>
+      )}
+
+      <Panel>
+        <UserPerkSection perks={draft.userPerks ?? []} onChange={(next) => patch({ userPerks: next })} />
+      </Panel>
+
+      <Panel>
+        <PromoSection promos={draft.promos} onChange={(next) => patch({ promos: next })} today={today} />
+      </Panel>
     </Sheet>
   );
 }

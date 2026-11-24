@@ -112,6 +112,10 @@ export function normalizeState(raw: unknown): AppState {
     },
     catalogVersion: typeof card.catalogVersion === 'number' ? card.catalogVersion : undefined,
     benefits: Array.isArray(card.benefits) ? card.benefits : [],
+    networkPerks: Array.isArray(card.networkPerks) ? card.networkPerks : [],
+    issuerPerks: Array.isArray(card.issuerPerks) ? card.issuerPerks : [],
+    merchantPerks: Array.isArray(card.merchantPerks) ? card.merchantPerks : [],
+    userPerks: Array.isArray(card.userPerks) ? card.userPerks : [],
     promos: Array.isArray(card.promos) ? card.promos : [],
     manual: {
       prevMonthAdjustment: Number(card.manual?.prevMonthAdjustment) || 0,

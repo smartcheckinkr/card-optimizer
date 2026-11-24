@@ -7,6 +7,8 @@ import { exportTransactionsCsv, importTransactionsCsv } from '../services/csv';
 import { exportStateJson, importStateJson } from '../services/storage';
 import type { AppState, Transaction } from '../types';
 import { CATALOG, CATALOG_BY_ID, catalogToCard, searchCatalog, walletItemsFromHints } from '../data/catalog';
+import { dedupePerks, findMerchantPerkHits, promoActive, promosState } from './perks';
+import type { Perk } from '../types';
 
 // 기준일: 2026-11-24 (전월 10월 / 당월 11월)
 const today = new Date(2026, 10, 24, 12, 0, 0);
@@ -621,5 +623,235 @@ describe('AI 비서 — 금액 없는 가맹점/세금 질문', () => {
     expect(askAssistant('주유소 카드 추천', state, today).text).toContain('주유');
     expect(askAssistant('편의점 결제 유리한 카드', state, today).text).toContain('편의점');
     expect(askAssistant('병원 결제 카드', state, today).text).toContain('병·의원');
+  });
+});
+
+describe('혜택 3계층(네트워크·카드사·카드) · 가맹점 · 이벤트', () => {
+  const stateWith = (...catalogIds: string[]): AppState => {
+    const state = base();
+    state.cards = catalogIds.map((id) => catalogToCard(CATALOG_BY_ID[id], { id: `c-${id}` }));
+    return state;
+  };
+
+  it('카탈로그는 30종 이상이고 id가 겹치지 않는다', () => {
+    expect(CATALOG.length).toBeGreaterThanOrEqual(30);
+    const ids = CATALOG.map((c) => c.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    for (const card of CATALOG) {
+      expect(card.benefits.length, card.id).toBeGreaterThan(0);
+      expect(card.source, card.id).toMatch(/^https?:\/\//);
+      expect(card.notice, card.id).toBeTruthy();
+    }
+  });
+
+  it('카드 브랜드 등급에 맞는 네트워크 혜택이 붙는다', () => {
+    const amex = CATALOG_BY_ID['samsung-amex-platinum-2021'];
+    expect(amex.networkTier).toBe('THE PLATINUM');
+    expect(amex.networkPerks?.some((p) => p.id === 'amex-global-lounge')).toBe(true);
+
+    const all = CATALOG_BY_ID['woori-all-infinite'];
+    expect(all.networkTier).toBe('Visa Infinite');
+    expect(all.networkPerks?.some((p) => p.id === 'visa-inf-concierge')).toBe(true);
+
+    const marriott = CATALOG_BY_ID['shinhan-marriott-bonvoy-best'];
+    expect(marriott.networkTier).toBe('Visa Signature');
+    expect(marriott.networkPerks?.some((p) => p.id === 'visa-sig-luxury-hotel')).toBe(true);
+
+    // 등급을 확인하지 못한 카드에는 네트워크 혜택을 붙이지 않는다
+    expect(CATALOG_BY_ID['lotte-digiroca-skypass'].networkPerks).toEqual([]);
+  });
+
+  it('같은 혜택이 네트워크·카드에 겹치면 구체적인 계층 하나만 남긴다', () => {
+    const network: Perk = {
+      id: 'n-lounge',
+      layer: 'network',
+      provider: 'AMEX',
+      label: 'Global Lounge',
+      group: 'airport',
+      kind: 'access',
+      summary: '네트워크 라운지',
+      dedupeKey: 'lounge',
+      verification: 'official',
+    };
+    const cardPerk: Perk = {
+      id: 'c-lounge',
+      layer: 'merchant',
+      provider: '신한카드',
+      label: 'The Lounge 연 4회',
+      group: 'airport',
+      kind: 'access',
+      summary: '카드 고유 라운지',
+      dedupeKey: 'lounge',
+      verification: 'official',
+    };
+    const { kept, merged } = dedupePerks([network, cardPerk]);
+    expect(kept).toHaveLength(1);
+    expect(kept[0].id).toBe('c-lounge');
+    expect(merged[0].perk.id).toBe('n-lounge');
+  });
+
+  it('CGV 질문은 CGV 직접 혜택이 있는 카드를 먼저 보여 준다', () => {
+    const state = stateWith('samsung-taptap-o', 'shinhan-marriott-bonvoy-best', 'kb-toktok-my-point');
+    const answer = askAssistant('CGV 결제에 유리한 카드', state, today);
+    expect(answer.intent).toBe('place');
+    expect(answer.text).not.toContain('전용 혜택 없음');
+    expect(answer.text).toContain('① 가맹점 직접 혜택');
+    expect(answer.text).toContain('taptap O');
+    expect(answer.text).toContain('5,000원');
+  });
+
+  it('면세점 질문에 면세점 멤버십·적립 근거가 나온다', () => {
+    const state = stateWith('samsung-amex-platinum-2021', 'lotte-hilton-amex', 'hana-jade-classic');
+    const answer = askAssistant('면세점 결제 유리한 카드', state, today);
+    expect(answer.text).toContain('면세점');
+    expect(answer.text).toMatch(/멤버십|면세점 \d/);
+  });
+
+  it('공항 라운지 질문은 라운지 혜택 카드를 리스트업한다', () => {
+    const state = stateWith('shinhan-marriott-bonvoy-best', 'woori-all-infinite', 'hana-jade-classic');
+    const answer = askAssistant('공항 라운지 되는 카드', state, today);
+    expect(answer.intent).toBe('place');
+    expect(answer.text).toContain('라운지');
+    expect(answer.text).toMatch(/메리어트|ALL 인피니트|JADE/);
+  });
+
+  it('기간이 지난 이벤트는 추천 계산에서 제외한다', () => {
+    const state = stateWith('samsung-taptap-o');
+    const card = state.cards[0];
+    card.promos = [
+      {
+        id: 'expired',
+        label: '지난 이벤트',
+        categories: ['general'],
+        minSpend: 0,
+        rewardKrw: 10_000,
+        expiresAt: '2026-10-31',
+        enrolled: true,
+        verification: 'official',
+      },
+      {
+        id: 'active',
+        label: '진행 이벤트',
+        categories: ['general'],
+        minSpend: 0,
+        rewardKrw: 5_000,
+        expiresAt: '2026-12-31',
+        enrolled: true,
+        verification: 'official',
+      },
+    ];
+    const rec = evaluateCardPayment(card, state, { amount: 30_000, category: 'general', merchant: '테스트' }, today);
+    expect(rec.promo?.id).toBe('active');
+    expect(promoActive(card.promos[0], today)).toBe(false);
+    expect(promosState(card.promos[0], today)).toBe('expired');
+  });
+
+  it('진행 중 이벤트는 AI 비서 답변에 기간 한정으로 표시한다', () => {
+    const state = stateWith('samsung-taptap-o');
+    const card = state.cards[0];
+    card.promos = [
+      {
+        id: 'active',
+        label: '영화 3천 원 추가 할인',
+        categories: ['general'],
+        minSpend: 10_000,
+        rewardKrw: 3_000,
+        expiresAt: '2026-12-31',
+        enrolled: true,
+        verification: 'official',
+      },
+    ];
+    const answer = askAssistant('CGV 결제에 유리한 카드', state, today);
+    expect(answer.text).toContain('이벤트(기간 한정)');
+    expect(answer.text).toContain('2026-12-31');
+  });
+
+  it('사용자가 직접 추가한 혜택도 순위와 답변에 반영된다', () => {
+    const state = stateWith('kb-toktok-my-point', 'samsung-taptap-o');
+    const custom = state.cards[0];
+    custom.userPerks = [
+      {
+        id: 'user-cgv',
+        layer: 'user',
+        provider: '사용자',
+        label: 'CGV 3,000원 할인',
+        group: 'culture',
+        kind: 'voucher',
+        amountKrw: 3_000,
+        summary: '카드사 앱에서 확인한 CGV 할인',
+        merchantKeys: ['cgv', '영화'],
+        verification: 'user',
+        sourceUrl: 'https://example.com/benefit',
+        capturePath: 'cap-test-1',
+      },
+    ];
+    const hits = findMerchantPerkHits(state.cards, 'CGV', 'general', 30_000, () => 500_000);
+    const customHit = hits.find((h) => h.card.id === custom.id);
+    expect(customHit).toBeDefined();
+    expect(customHit!.layerLabel).toBe('직접 추가');
+    // 사용자 혜택(3천 원)은 카드 고유 혜택(5천 원)보다 뒤에 정렬된다
+    expect(hits[0].card.id).toBe('c-samsung-taptap-o');
+    const answer = askAssistant('CGV 결제 유리한 카드', state, today);
+    expect(answer.text).toContain('톡톡 My point');
+    expect(answer.text).toContain('[직접 추가]');
+  });
+
+  it('저장 데이터를 내보내고 다시 불러와도 사용자 혜택·캡처 경로·이벤트 출처가 유지된다', () => {
+    const state = stateWith('samsung-taptap-o');
+    const card = state.cards[0];
+    card.userPerks = [
+      {
+        id: 'u1',
+        layer: 'user',
+        provider: '사용자',
+        label: '스타벅스 2,000원 할인',
+        group: 'cafe',
+        kind: 'voucher',
+        amountKrw: 2_000,
+        summary: '앱 캡처로 확인',
+        verification: 'user',
+        capturePath: 'cap-abc',
+        sourceUrl: 'https://example.com/cafe',
+      },
+    ];
+    card.promos = [
+      {
+        id: 'p1',
+        label: '이벤트',
+        categories: ['general'],
+        minSpend: 0,
+        rewardKrw: 1_000,
+        startsAt: '2026-11-01',
+        expiresAt: '2026-12-31',
+        enrolled: false,
+        verification: 'user',
+        sourceUrl: 'https://example.com/event',
+        capturePath: 'cap-evt',
+      },
+    ];
+    const restored = importStateJson(exportStateJson(state));
+    const target = restored.cards.find((c) => c.catalogId === 'samsung-taptap-o')!;
+    expect(target.userPerks?.[0].capturePath).toBe('cap-abc');
+    expect(target.userPerks?.[0].sourceUrl).toBe('https://example.com/cafe');
+    expect(target.promos[0].sourceUrl).toBe('https://example.com/event');
+    expect(target.promos[0].capturePath).toBe('cap-evt');
+    expect(target.promos[0].startsAt).toBe('2026-11-01');
+    // 사용자가 입력한 값은 카탈로그 갱신 후에도 남는다
+    expect(target.merchantPerks?.length ?? 0).toBeGreaterThan(0);
+  });
+
+  it('가맹점 혜택이 없는 질문은 전용 혜택 없음을 솔직히 말하고 대안을 제시한다', () => {
+    const state = stateWith('samsung-taptap-o', 'hyundai-zero-edition3');
+    const answer = askAssistant('병원 결제 유리한 카드', state, today);
+    expect(answer.text).toContain('전용 혜택 없음');
+    expect(answer.text).toMatch(/대신 업종·기본 적립/);
+    expect(answer.text).toContain('금액을 말하지 않아');
+  });
+
+  it('카탈로그 검색은 새로 추가한 카드사·카드를 찾는다', () => {
+    expect(searchCatalog('삼성').some((c) => c.id === 'samsung-taptap-o')).toBe(true);
+    expect(searchCatalog('KB').some((c) => c.issuer === 'KB국민카드')).toBe(true);
+    expect(searchCatalog('JADE')[0].id).toBe('hana-jade-classic');
+    expect(searchCatalog('농협').some((c) => c.id === 'nh-solsol')).toBe(true);
   });
 });

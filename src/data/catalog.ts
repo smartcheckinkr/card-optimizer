@@ -10,6 +10,9 @@ import type {
   WalletItem,
 } from '../types';
 import { todayISO } from '../engine/date';
+import { networkPerksFor, issuerPerksFor } from './perks';
+import { merchantPerksFor, NETWORK_TIERS } from './merchant-perks';
+import { EXTRA_CATALOG } from './catalog-extra';
 
 /**
  * 카드 카탈로그 — '+ 카드 추가' 화면에서 검색해 조건을 자동 입력하는 상품 데이터.
@@ -24,7 +27,7 @@ import { todayISO } from '../engine/date';
  * 마지막 확인: 2026-11-24 (카드사 공식 페이지·상품설명서·카드 비교공시 웹 확인).
  * CATALOG_CONDITIONS_VERSION 을 올리면 저장된 카드의 상품 조건이 자동으로 갱신된다.
  */
-export const CATALOG_CONDITIONS_VERSION = 2;
+export const CATALOG_CONDITIONS_VERSION = 3;
 
 const DOMESTIC: CategoryId[] = [
   'department',
@@ -1793,18 +1796,25 @@ const CATALOG_LIST: CatalogCard[] = [
 ];
 
 /** 키워드 중복을 정리한 최종 카탈로그 */
-export const CATALOG: CatalogCard[] = CATALOG_LIST.map((card) => ({
-  ...card,
-  performance: {
-    ...card.performance,
-    excludedCategories: Array.from(new Set(card.performance.excludedCategories)),
-    excludedKeywords: uniqueKeywords(card.performance.excludedKeywords ?? []),
-  },
-  benefitExclusions: {
-    categories: Array.from(new Set(card.benefitExclusions?.categories ?? [])),
-    keywords: uniqueKeywords(card.benefitExclusions?.keywords ?? []),
-  },
-}));
+export const CATALOG: CatalogCard[] = [...CATALOG_LIST, ...EXTRA_CATALOG].map((card) => {
+  const networkTier = card.networkTier ?? NETWORK_TIERS[card.id];
+  return {
+    ...card,
+    networkTier,
+    networkPerks: card.networkPerks ?? networkPerksFor(card.network, networkTier),
+    issuerPerks: card.issuerPerks ?? issuerPerksFor(card.id),
+    merchantPerks: card.merchantPerks ?? merchantPerksFor(card.id),
+    performance: {
+      ...card.performance,
+      excludedCategories: Array.from(new Set(card.performance.excludedCategories)),
+      excludedKeywords: uniqueKeywords(card.performance.excludedKeywords ?? []),
+    },
+    benefitExclusions: {
+      categories: Array.from(new Set(card.benefitExclusions?.categories ?? [])),
+      keywords: uniqueKeywords(card.benefitExclusions?.keywords ?? []),
+    },
+  };
+});
 
 export const CATALOG_BY_ID: Record<string, CatalogCard> = CATALOG.reduce(
   (acc, card) => ({ ...acc, [card.id]: card }),
@@ -1819,6 +1829,39 @@ function normalize(text: string): string {
 }
 
 /**
+ * 검색 인덱스 — 카드가 늘어나도 검색할 때마다 문자열을 다시 만들지 않도록
+ * 모듈 로드 시 한 번만 계산한다(정적 카탈로그).
+ */
+interface SearchRow {
+  card: CatalogCard;
+  index: number;
+  name: string;
+  shortName: string;
+  issuer: string;
+  aliases: string[];
+  tags: string[];
+  haystack: string;
+}
+
+const SEARCH_INDEX: SearchRow[] = CATALOG.map((card, index) => {
+  const name = normalize(card.name);
+  const shortName = normalize(card.shortName);
+  const issuer = normalize(card.issuer);
+  const aliases = card.aliases.map(normalize);
+  const tags = card.tags.map(normalize);
+  return {
+    card,
+    index,
+    name,
+    shortName,
+    issuer,
+    aliases,
+    tags,
+    haystack: [name, shortName, issuer, ...aliases, ...tags].join('|'),
+  };
+});
+
+/**
  * 카드명·카드사·키워드·태그로 카탈로그를 검색한다.
  * 모든 검색어 토큰이 이름/별칭/카드사/태그 중 하나에 포함되어야 한다.
  */
@@ -1829,15 +1872,9 @@ export function searchCatalog(query: string, tag?: string | null): CatalogCard[]
     .map(normalize)
     .filter(Boolean);
 
-  const scored = CATALOG_LIST.filter((card) => !tag || card.tags.includes(tag))
-    .map((card, index) => {
-      const name = normalize(card.name);
-      const shortName = normalize(card.shortName);
-      const issuer = normalize(card.issuer);
-      const aliases = card.aliases.map(normalize);
-      const tags = card.tags.map(normalize);
-      const haystack = [name, shortName, issuer, ...aliases, ...tags].join('|');
-
+  const scored = SEARCH_INDEX.filter((row) => !tag || row.card.tags.includes(tag))
+    .map((row) => {
+      const { card, index, name, shortName, issuer, aliases, tags, haystack } = row;
       const matchesAll = tokens.every((t) => haystack.includes(t));
       if (!matchesAll) return null;
 
@@ -1934,8 +1971,13 @@ export function applyCatalogConditions(entry: CatalogCard, card: Card): Card {
     network: entry.network,
     theme: entry.theme,
     annualFee: entry.annualFee,
+    networkTier: entry.networkTier,
     performance: clonePerformance(entry),
     benefits: [...entry.benefits.map(cloneBenefit), ...customBenefits.map(cloneBenefit)],
+    networkPerks: entry.networkPerks ? entry.networkPerks.map((p) => ({ ...p })) : [],
+    issuerPerks: entry.issuerPerks ? entry.issuerPerks.map((p) => ({ ...p })) : [],
+    merchantPerks: entry.merchantPerks ? entry.merchantPerks.map((p) => ({ ...p })) : [],
+    userPerks: card.userPerks ?? [],
     benefitExclusions: {
       categories: [...(entry.benefitExclusions?.categories ?? [])],
       keywords: [...(entry.benefitExclusions?.keywords ?? [])],
@@ -1965,8 +2007,13 @@ export function catalogToCard(
     theme: entry.theme,
     last4: options.last4,
     annualFee: entry.annualFee,
+    networkTier: entry.networkTier,
     performance: clonePerformance(entry),
     benefits: entry.benefits.map(cloneBenefit),
+    networkPerks: entry.networkPerks ? entry.networkPerks.map((p) => ({ ...p })) : [],
+    issuerPerks: entry.issuerPerks ? entry.issuerPerks.map((p) => ({ ...p })) : [],
+    merchantPerks: entry.merchantPerks ? entry.merchantPerks.map((p) => ({ ...p })) : [],
+    userPerks: [],
     promos: (entry.promos ?? []).map((promo) => ({ ...promo, enrolled: false })),
     manual: { prevMonthAdjustment: 0, currentMonthAdjustment: 0 },
     usage: options.usage ?? {},

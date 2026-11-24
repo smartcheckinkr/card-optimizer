@@ -21,8 +21,68 @@ export type CategoryId =
   | 'tax' // 세금·공과금(대부분 실적 제외)
   | 'general'; // 일반
 
-/** official: 카드사 공식 자료로 확인된 값 · example: 공식 확인 전 예시값 */
+/** official: 카드사·브랜드사 공식 자료로 확인된 값 · example: 공식 확인 전 예시값 · user: 사용자가 직접 입력 */
 export type Verification = 'official' | 'example';
+export type PerkVerification = Verification | 'user';
+
+/** 혜택이 어디서 오는지 — 네트워크(브랜드) → 카드사 → 카드 고유(가맹점 포함) → 사용자 입력 */
+export type PerkLayer = 'network' | 'issuer' | 'card' | 'merchant' | 'user';
+
+/** 카드 상세에서 묶어 보여 주는 혜택 영역 */
+export type PerkGroup =
+  | 'airport'
+  | 'hotel'
+  | 'dutyfree'
+  | 'culture'
+  | 'cafe'
+  | 'shopping'
+  | 'transport'
+  | 'living'
+  | 'golf'
+  | 'dining'
+  | 'other';
+
+export type PerkKind = 'discount' | 'points' | 'voucher' | 'free' | 'access' | 'status' | 'installment';
+
+/**
+ * 상시(고유) 혜택 한 건. 실제 적립률 계산에 쓰는 BenefitRule과 달리
+ * 라운지·발렛·멤버십처럼 금액화하기 어려운 혜택과 가맹점 단위 혜택을 담는다.
+ * 같은 혜택이 네트워크·카드사·카드에 겹쳐 있으면 dedupeKey로 묶어 하나만 적용한다.
+ */
+export interface Perk {
+  id: string;
+  layer: PerkLayer;
+  /** 'AMEX' | 'VISA' | '신한카드' | '메리어트' | '사용자' 등 */
+  provider: string;
+  label: string;
+  group: PerkGroup;
+  kind: PerkKind;
+  /** 할인·적립률(%) — kind=discount/points */
+  ratePercent?: number;
+  /** 정액 혜택(원) — kind=voucher/discount */
+  amountKrw?: number;
+  /** 월 한도(원) — 할인·적립형 혜택의 월 상한 */
+  monthlyCapKrw?: number;
+  /** 무료 이용 횟수 */
+  uses?: { count: number; period: 'month' | 'year' | 'once' };
+  /** '연 4회 본인+동반 1인'처럼 화면에 그대로 쓰는 표기 */
+  valueText?: string;
+  /** 왜 유리한지 한 줄 */
+  summary: string;
+  conditions?: string;
+  minPrevMonth?: number;
+  /** 가맹점 매칭 키(소문자 비교) */
+  merchantKeys?: string[];
+  categories?: CategoryId[];
+  /** 같은 혜택 중복 방지 키(예: 'lounge', 'valet', 'dutyfree-membership') */
+  dedupeKey?: string;
+  verification: PerkVerification;
+  sourceName?: string;
+  sourceUrl?: string;
+  /** IndexedDB에 저장한 캡처 이미지 키 */
+  capturePath?: string;
+  note?: string;
+}
 
 export type PointCurrencyId =
   | 'bonvoy'
@@ -76,17 +136,29 @@ export interface BenefitRule {
   note?: string;
 }
 
-/** 기간 한정 이벤트(응모형) — 확정 할인과 분리해서 표시한다. */
+/** 기간 한정 이벤트 — 상시 혜택과 분리해서 표시하고, 기간이 지나면 계산에서 제외한다. */
 export interface PromoRule {
   id: string;
+  /** 이벤트명 */
   label: string;
+  /** 혜택 내용(사용자가 직접 적는 설명) */
+  description?: string;
   categories: CategoryId[];
   /** 이벤트 기간 중 해당 업종 누적 결제 기준액 */
   minSpend: number;
   rewardKrw: number;
+  /** YYYY-MM-DD (없으면 시작일 제한 없음) */
+  startsAt?: string;
+  /** YYYY-MM-DD (이 날짜까지 유효) */
   expiresAt: string;
   enrolled: boolean;
-  verification: Verification;
+  /** 이벤트 조건 메모(전월 실적·건당 금액 등) */
+  conditions?: string;
+  sourceName?: string;
+  sourceUrl?: string;
+  /** IndexedDB에 저장한 캡처 이미지 키 */
+  capturePath?: string;
+  verification: PerkVerification;
   note?: string;
 }
 
@@ -145,8 +217,18 @@ export interface Card {
   theme: 'navy' | 'violet' | 'emerald' | 'graphite' | 'coral';
   last4?: string;
   annualFee: number;
+  /** 브랜드(네트워크) 등급 — 'Visa Infinite', 'Mastercard World', 'THE PLATINUM' 등 */
+  networkTier?: string;
   performance: PerformanceRule;
   benefits: BenefitRule[];
+  /** 브랜드사(네트워크) 공통 혜택 */
+  networkPerks?: Perk[];
+  /** 카드사 공통·선택서비스 혜택 */
+  issuerPerks?: Perk[];
+  /** 카드 고유 가맹점 혜택 */
+  merchantPerks?: Perk[];
+  /** 사용자가 직접 추가한 상시 혜택 */
+  userPerks?: Perk[];
   promos: PromoRule[];
   /** 수동 보정(원). 카드사 공식 실적과 차이가 있을 때 사용자가 조정한다. */
   manual: { prevMonthAdjustment: number; currentMonthAdjustment: number };
@@ -248,9 +330,17 @@ export interface CatalogCard {
   /** 대표(해외겸용) 연회비 */
   annualFee: number;
   annualFeeNote?: string;
+  /** 브랜드(네트워크) 등급 */
+  networkTier?: string;
   performance: PerformanceRule;
   benefits: BenefitRule[];
-  /** 적립·할인 제외 대상(실적 제외와 별개) */
+  /** 브랜드사(네트워크) 공통 혜택 */
+  networkPerks?: Perk[];
+  /** 카드사 공통·선택서비스 혜택 */
+  issuerPerks?: Perk[];
+  /** 카드 고유 가맹점 혜택 */
+  merchantPerks?: Perk[];
+  /** 적립·할인 제외 대상(실적 제외 별개) */
   benefitExclusions?: BenefitExclusion;
   /** 카드 선택 화면·카드 상세에 띄우는 약관 요약 안내 */
   notice?: string;
