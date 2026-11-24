@@ -344,6 +344,13 @@ describe('카드 카탈로그', () => {
     expect(items.every((i) => i.remaining === i.total)).toBe(true);
   });
 
+  it('태그가 실제 조건과 모순되지 않는다', () => {
+    for (const card of CATALOG) {
+      if (card.tags.includes('연회비 없음')) expect(card.annualFee, card.id).toBe(0);
+      if (card.tags.includes('무실적')) expect(card.performance.prevThreshold, card.id).toBe(0);
+    }
+  });
+
   it('카탈로그에는 결제 인증정보·연락처가 없다', () => {
     const text = JSON.stringify(CATALOG);
     expect(text).not.toMatch(/\d{3}-\d{3,4}-\d{4}/); // 전화번호
