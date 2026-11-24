@@ -71,6 +71,11 @@ function exclusions(categories: CategoryId[] = [], keywords: string[] = []): Ben
   return { categories, keywords };
 }
 
+/** 중복 키워드 제거(카드사 목록을 합치다 보면 겹치는 항목이 생긴다). */
+function uniqueKeywords(list: string[]): string[] {
+  return Array.from(new Set(list.map((k) => k.trim()).filter(Boolean)));
+}
+
 const ARCOR_KEYWORDS = ['아코르', 'accor', '노보텔', '소피텔', '이비스', '풀만', '페어몬트', 'mercure', 'ibis', 'sofitel', 'novotel', 'pullman', 'fairmont'];
 
 const CATALOG_LIST: CatalogCard[] = [
@@ -1787,9 +1792,21 @@ const CATALOG_LIST: CatalogCard[] = [
   },
 ];
 
-export const CATALOG: CatalogCard[] = CATALOG_LIST;
+/** 키워드 중복을 정리한 최종 카탈로그 */
+export const CATALOG: CatalogCard[] = CATALOG_LIST.map((card) => ({
+  ...card,
+  performance: {
+    ...card.performance,
+    excludedCategories: Array.from(new Set(card.performance.excludedCategories)),
+    excludedKeywords: uniqueKeywords(card.performance.excludedKeywords ?? []),
+  },
+  benefitExclusions: {
+    categories: Array.from(new Set(card.benefitExclusions?.categories ?? [])),
+    keywords: uniqueKeywords(card.benefitExclusions?.keywords ?? []),
+  },
+}));
 
-export const CATALOG_BY_ID: Record<string, CatalogCard> = CATALOG_LIST.reduce(
+export const CATALOG_BY_ID: Record<string, CatalogCard> = CATALOG.reduce(
   (acc, card) => ({ ...acc, [card.id]: card }),
   {} as Record<string, CatalogCard>,
 );
@@ -1887,7 +1904,7 @@ function clonePerformance(entry: CatalogCard): PerformanceRule {
     thresholdScope: entry.performance.thresholdScope,
     minPerTransaction: entry.performance.minPerTransaction,
     excludedCategories: [...entry.performance.excludedCategories],
-    excludedKeywords: entry.performance.excludedKeywords ? [...entry.performance.excludedKeywords] : [],
+    excludedKeywords: uniqueKeywords(entry.performance.excludedKeywords ?? []),
     conditions: entry.performance.conditions ? entry.performance.conditions.map((c) => ({ ...c })) : undefined,
   };
 }
@@ -1955,7 +1972,7 @@ export function catalogToCard(
     usage: options.usage ?? {},
     benefitExclusions: {
       categories: [...(entry.benefitExclusions?.categories ?? [])],
-      keywords: [...(entry.benefitExclusions?.keywords ?? [])],
+      keywords: uniqueKeywords(entry.benefitExclusions?.keywords ?? []),
     },
     notice: entry.notice,
     catalogVersion: CATALOG_CONDITIONS_VERSION,

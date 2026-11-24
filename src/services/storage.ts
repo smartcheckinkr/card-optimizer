@@ -99,12 +99,16 @@ export function normalizeState(raw: unknown): AppState {
       excludedCategories: Array.isArray(card.performance?.excludedCategories)
         ? (card.performance!.excludedCategories as Card['performance']['excludedCategories'])
         : [],
-      excludedKeywords: Array.isArray(card.performance?.excludedKeywords) ? card.performance!.excludedKeywords : [],
+      excludedKeywords: Array.isArray(card.performance?.excludedKeywords)
+        ? Array.from(new Set(card.performance!.excludedKeywords))
+        : [],
       conditions: Array.isArray(card.performance?.conditions) ? card.performance!.conditions : undefined,
     },
     benefitExclusions: {
       categories: Array.isArray(card.benefitExclusions?.categories) ? card.benefitExclusions!.categories : [],
-      keywords: Array.isArray(card.benefitExclusions?.keywords) ? card.benefitExclusions!.keywords : [],
+      keywords: Array.isArray(card.benefitExclusions?.keywords)
+        ? Array.from(new Set(card.benefitExclusions!.keywords))
+        : [],
     },
     catalogVersion: typeof card.catalogVersion === 'number' ? card.catalogVersion : undefined,
     benefits: Array.isArray(card.benefits) ? card.benefits : [],

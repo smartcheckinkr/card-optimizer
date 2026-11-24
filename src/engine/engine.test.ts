@@ -528,7 +528,23 @@ describe('약관 정밀 보정 (v2)', () => {
         expect(card.performance.prevThreshold, card.id).toBeGreaterThan(0);
       }
       expect(card.benefitExclusions?.keywords.length ?? 0, card.id).toBeGreaterThan(0);
+      const perfKeywords = card.performance.excludedKeywords ?? [];
+      expect(new Set(perfKeywords).size, card.id).toBe(perfKeywords.length);
+      const benefitKeywords = card.benefitExclusions?.keywords ?? [];
+      expect(new Set(benefitKeywords).size, card.id).toBe(benefitKeywords.length);
     }
+  });
+
+  it('저장된 카드의 제외 키워드도 중복 없이 정리된다', () => {
+    const state = base();
+    state.cards = state.cards.map((c) =>
+      c.id === 'marriott-bonvoy-shinhan'
+        ? { ...c, performance: { ...c.performance, excludedKeywords: ['상품권', '상품권', '등록금'] } }
+        : c,
+    );
+    const restored = importStateJson(exportStateJson(state));
+    const card = restored.cards.find((c) => c.id === 'marriott-bonvoy-shinhan')!;
+    expect(card.performance.excludedKeywords).toEqual(['상품권', '등록금']);
   });
 
   it('저장된 카드(v1)는 최신 약관으로 자동 갱신되고 사용자 값은 유지된다', () => {
