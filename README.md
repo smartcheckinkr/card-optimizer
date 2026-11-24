@@ -6,8 +6,29 @@
 
 - 프런트엔드: React 18 + TypeScript + Vite 5 + Tailwind CSS 3
 - 상태 저장: `localStorage` (JSON 내보내기/불러오기, 결제내역 CSV 가져오기)
-- 테스트: Vitest (계산 엔진·카탈로그·마이그레이션·AI 비서 단위 테스트 56개)
+- 테스트: Vitest (계산 엔진·카탈로그·마이그레이션·AI 비서·혜택 3계층 단위 테스트 69개)
 - PWA: `manifest.webmanifest`, 아이콘 3종, 서비스 워커(오프라인 캐시)
+
+---
+
+## 0. 카드 DB와 혜택 구조 (2026-11-24 확장)
+
+카탈로그는 **30종**이며, 카드마다 혜택을 4개 층으로 나눠 담습니다.
+
+| 층 | 필드 | 예 |
+|---|---|---|
+| 브랜드(네트워크) | `networkPerks` + `networkTier` | 아멕스 Global Lounge Collection·FHR, 비자 럭셔리 호텔 컬렉션·컨시어지, 마스터카드 HoteLux·면세점 멤버십 |
+| 카드사 | `issuerPerks` | 신한 공항 발렛파킹, 삼성 THE PLATINUM 선택서비스(공항·호텔 발렛, Be My Guest) |
+| 카드 고유·가맹점 | `merchantPerks` | 메리어트 조식 5만 원 할인, CGV 5,000원 할인, 공항 라운지, 힐튼 주말 숙박권 |
+| 사용자 직접 입력 | `userPerks` | 카드사 앱 캡처를 보고 직접 추가한 혜택 |
+
+- 같은 혜택이 여러 층에 있으면 `dedupeKey`로 묶어 **구체적인 층 하나만** 적용합니다(카드 > 카드사 > 네트워크).
+- 적립률 계산은 기존 `benefits`(BenefitRule)가, 라운지·발렛·바우처처럼 금액화가 어려운 혜택은 `Perk`가 담당합니다.
+- **이벤트(기간 한정)** 는 `promos`로 분리되어 있고, 기간이 지나면 목록에는 흐리게 남고 계산·AI 비서에서 자동 제외됩니다.
+- 캡처 이미지는 IndexedDB(`card-optimizer-captures`)에 긴 변 1280px JPEG로 저장되어 새로고침·재방문 후에도 유지됩니다.
+- 출처가 확인된 값은 `official`, 확인 전 값은 `example`, 사용자가 넣은 값은 `user` 배지로 구분합니다.
+
+확인 출처: 카드사 상품 페이지·상품설명서(신한·삼성·현대·KB국민·롯데·우리·하나·NH농협·BC), American Express 코리아, Visa 코리아 2026 프리미엄 서비스 가이드, Mastercard 프리미엄 서비스 안내. 조사 기록은 `research/2026-11-perks-notes.md`.
 
 ---
 
@@ -34,7 +55,7 @@ npm run preview    # 빌드 결과를 로컬 서버로 확인
 ### 테스트
 
 ```bash
-npm test           # vitest run (56개)
+npm test           # vitest run (69개)
 ```
 
 테스트 범위: 신세계백화점 30만 원 / 대한항공 공홈 150만 원 / 월 한도 초과 / 전월 실적 미달 /
