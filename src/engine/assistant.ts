@@ -360,7 +360,7 @@ function placeAnswer(state: AppState, question: string, hint: MerchantHint, toda
     lines.push('');
     lines.push(`※ ${hint.note}`);
   }
-  if (hint.category === 'general' || hint.category === 'dining') {
+  if ((hint.category === 'general' || hint.category === 'dining') && hint.defaultAmount > 0) {
     const tip = simplePayTip(state);
     if (tip.length > 0) {
       lines.push('');
