@@ -163,22 +163,39 @@ describe('실적 미달 · 취소 반영', () => {
     expect(results[0].cardShort).toBe('힐튼 아너스');
   });
 
-  it('세금·공과금은 실적에서 제외된다', () => {
+  it('세금·공과금은 실적 제외로 표시된 카드에서 빠진다 (ALL 인피니트)', () => {
     const state = base();
-    const marriott = cardOf(state, 'marriott-bonvoy-shinhan');
-    const withTax = withTransaction(state, { cardId: marriott.id, amount: 500_000, date: '2026-11-20', category: 'tax', merchant: '국세청' });
-    const breakdown = spendBreakdown(marriott, withTax.transactions, '2026-11');
-    expect(breakdown.recognized).toBe(300_000);
+    const all = { ...catalogToCard(CATALOG_BY_ID['woori-all-infinite'], { id: 'all-tax' }) };
+    const withTax = withTransaction(state, { cardId: all.id, amount: 500_000, date: '2026-11-20', category: 'tax', merchant: '국세청' });
+    const breakdown = spendBreakdown(all, withTax.transactions, '2026-11');
+    expect(all.performance.excludedCategories).toContain('tax');
+    expect(breakdown.recognized).toBe(0);
     expect(breakdown.exclusion.category).toBe(500_000);
   });
 
-  it('건당 최소금액 미만 결제는 실적에서 제외된다', () => {
+  it('메리어트 신한은 세금·공과금도 전월 실적에 포함한다(약관: 실적 제외 아님)', () => {
+    const state = base();
+    const marriott = cardOf(state, 'marriott-bonvoy-shinhan');
+    const withTax = withTransaction(state, { cardId: marriott.id, amount: 300_000, date: '2026-10-20', category: 'tax', merchant: '국세청' });
+    expect(marriott.performance.excludedCategories).not.toContain('tax');
+    expect(prevMonthSpend(marriott, withTax.transactions, today)).toBe(750_000);
+  });
+
+  it('건당 최소 인정금액 미만 결제는 실적에서 제외된다 (디지로카 1,000원)', () => {
+    const state = base();
+    const digiroca = catalogToCard(CATALOG_BY_ID['lotte-digiroca-skypass'], { id: 'digiroca-min' });
+    const withSmall = withTransaction(state, { cardId: digiroca.id, amount: 500, date: '2026-11-21', category: 'dining', merchant: '커피' });
+    const breakdown = spendBreakdown(digiroca, withSmall.transactions, '2026-11');
+    expect(digiroca.performance.minPerTransaction).toBe(1_000);
+    expect(breakdown.recognized).toBe(0);
+    expect(breakdown.exclusion.minAmount).toBe(500);
+  });
+
+  it('건당 최소금액이 없는 카드는 소액 결제도 실적에 들어간다 (메리어트)', () => {
     const state = base();
     const marriott = cardOf(state, 'marriott-bonvoy-shinhan');
     const withSmall = withTransaction(state, { cardId: marriott.id, amount: 500, date: '2026-11-21', category: 'dining', merchant: '커피' });
-    const breakdown = spendBreakdown(marriott, withSmall.transactions, '2026-11');
-    expect(breakdown.recognized).toBe(300_000);
-    expect(breakdown.exclusion.minAmount).toBe(500);
+    expect(spendBreakdown(marriott, withSmall.transactions, '2026-11').recognized).toBe(300_500);
   });
 
   it('이번 결제가 다음 달 실적을 채우면 충족 상태로 표시된다', () => {
@@ -284,7 +301,7 @@ describe('AI 비서 (로컬 규칙 엔진)', () => {
   });
 
   it('해석하지 못한 질문은 LLM 미연동을 투명하게 알린다', () => {
-    const answer = askAssistant('오늘 점심 뭐 먹지', state, today);
+    const answer = askAssistant('오늘 기분 어때', state, today);
     expect(answer.intent).toBe('unknown');
     expect(answer.text).toContain('외부 LLM');
   });
@@ -327,8 +344,14 @@ describe('카드 카탈로그', () => {
     expect(card.catalogId).toBe('woori-all-infinite');
     expect(card.name).toBe(entry.name);
     expect(card.annualFee).toBe(500_000);
-    expect(card.performance.prevThreshold).toBe(0);
+    // 기본 적립은 실적 무관이지만 특별적립·프리미엄 서비스는 전월 50만 원이 기준이다
+    expect(card.performance.prevThreshold).toBe(500_000);
+    expect(card.performance.thresholdScope).toContain('특별적립');
     expect(card.performance.excludedCategories).toContain('tax');
+    expect(card.performance.excludedKeywords).toContain('교통카드 충전');
+    expect(card.benefitExclusions?.categories).toContain('tax');
+    expect(card.performance.conditions?.some((c) => c.amount === 0)).toBe(true);
+    expect(card.performance.conditions?.some((c) => c.amount === 500_000)).toBe(true);
     expect(card.benefits.length).toBe(entry.benefits.length);
     expect(card.benefits.some((b) => b.minPrevMonth === 500_000)).toBe(true);
     expect(card.verification).toBe('official');
@@ -391,12 +414,14 @@ describe('카탈로그 카드 계산', () => {
     expect(rec.immediateKrw).toBe(120_000);
   });
 
-  it('현대카드M은 세금·공과금도 실적에 포함한다', () => {
+  it('현대카드M은 세금·공과금을 실적에서 제외한다(약관: 공과금 납부액 제외)', () => {
     const state = base();
     const card = catalogToCard(CATALOG_BY_ID['hyundai-m'], { id: 'm-card' });
     state.cards = [card];
     state.transactions = [{ id: 't', cardId: 'm-card', merchant: '국세청', category: 'tax', amount: 600_000, date: '2026-10-10', status: 'active', createdAt: today.toISOString() }];
-    expect(performanceStatus(card, state.transactions, today).met).toBe(true);
+    expect(card.performance.excludedCategories).toContain('tax');
+    expect(performanceStatus(card, state.transactions, today).met).toBe(false);
+    expect(spendBreakdown(card, state.transactions, '2026-10').exclusion.category).toBe(600_000);
   });
 });
 
@@ -437,5 +462,148 @@ describe('저장 · 복원', () => {
     delete partial.settings;
     const restored = importStateJson(JSON.stringify(partial));
     expect(restored.settings.pointValues.bonvoy).toBe(10);
+  });
+});
+
+describe('약관 정밀 보정 (v2)', () => {
+  it('ALL 인피니트 특별적립은 아코르·해외가 통합 4,000P 한도를 함께 쓴다', () => {
+    const state = base();
+    const card = {
+      ...catalogToCard(CATALOG_BY_ID['woori-all-infinite'], { id: 'all-shared' }),
+      manual: { prevMonthAdjustment: 500_000, currentMonthAdjustment: 0 },
+    };
+    state.cards = [card];
+    const hotel = evaluateCardPayment(card, state, { amount: 3_000_000, category: 'hotel', merchant: '노보텔 앰배서더' }, today);
+    // 3,000,000/3,000 × 5P = 5,000P 이지만 통합 한도 4,000P(≈120,000원)까지만
+    expect(hotel.immediateKrw).toBe(120_000);
+    expect(hotel.benefitLines[0].capped).toBe(true);
+
+    // 이미 아코르 특별적립으로 한도를 다 쓴 상태라면 해외 특별적립은 0 (같은 4,000P 묶음)
+    state.cards = [{ ...card, usage: { 'all-hotel': 120_000 } }];
+    const after = evaluateCardPayment(state.cards[0], state, { amount: 3_000_000, category: 'overseas', merchant: '해외 가맹점' }, today);
+    expect(after.immediateKrw).toBe(0);
+  });
+
+  it('ALL 인피니트 기본적립은 실적 미달이어도 유지되고 특별적립만 막힌다', () => {
+    const state = base();
+    const card = catalogToCard(CATALOG_BY_ID['woori-all-infinite'], { id: 'all-base' });
+    state.cards = [card];
+    const hotel = evaluateCardPayment(card, state, { amount: 300_000, category: 'hotel', merchant: '노보텔 앰배서더' }, today);
+    // 전월 실적 0 → 특별적립(5P) 불가, 기본 1.3P만 적용
+    expect(hotel.performance.met).toBe(false);
+    expect(hotel.benefitLines[0].label).toContain('국내 가맹점');
+    expect(hotel.immediateKrw).toBeGreaterThan(0);
+  });
+
+  it('적립 제외 업종은 실적에는 들어가지만 혜택은 0이다', () => {
+    const state = base();
+    const card = catalogToCard(CATALOG_BY_ID['shinhan-marriott-bonvoy-best'], { id: 'marriott-excl' });
+    state.cards = [card];
+    const rec = evaluateCardPayment(card, state, { amount: 500_000, category: 'tax', merchant: '지방세' }, today);
+    expect(rec.immediateKrw).toBe(0);
+    expect(rec.cautions.join(' ')).toContain('적립·할인 제외');
+  });
+
+  it('실적 제외 업종 칩이 카드사 약관대로 채워져 있다', () => {
+    const all = CATALOG_BY_ID['woori-all-infinite'];
+    expect(all.performance.excludedCategories).toEqual(['tax']);
+    expect(all.performance.excludedKeywords).toContain('교통카드 충전');
+
+    const idEv = CATALOG_BY_ID['samsung-id-ev'];
+    expect(idEv.performance.excludedCategories).toEqual(expect.arrayContaining(['tax', 'transit']));
+    expect(idEv.performance.excludedKeywords).toContain('하이패스');
+
+    const green = CATALOG_BY_ID['hana-green'];
+    expect(green.performance.excludedCategories).toEqual(expect.arrayContaining(['tax', 'transit', 'overseas']));
+
+    const hilton = CATALOG_BY_ID['lotte-hilton-amex'];
+    expect(hilton.performance.excludedCategories).toEqual(expect.arrayContaining(['tax', 'transit']));
+  });
+
+  it('모든 카탈로그 카드가 전월 실적 갈래(conditions)와 안내문을 갖는다', () => {
+    for (const card of CATALOG) {
+      expect(card.performance.conditions?.length, card.id).toBeGreaterThan(0);
+      expect(card.notice, card.id).toBeTruthy();
+      if (card.benefits.some((b) => b.minPrevMonth)) {
+        expect(card.performance.prevThreshold, card.id).toBeGreaterThan(0);
+      }
+      expect(card.benefitExclusions?.keywords.length ?? 0, card.id).toBeGreaterThan(0);
+    }
+  });
+
+  it('저장된 카드(v1)는 최신 약관으로 자동 갱신되고 사용자 값은 유지된다', () => {
+    const raw = JSON.parse(exportStateJson(base()));
+    const all = raw.cards.find((c: { id: string }) => c.id === 'marriott-bonvoy-shinhan');
+    // v1 저장본: 해외/면세점이 없고 실적 갈래·안내·제외 목록이 비어 있던 상태
+    all.catalogId = 'shinhan-marriott-bonvoy-best';
+    all.catalogVersion = 1;
+    all.performance.prevThreshold = 300_000;
+    all.performance.excludedCategories = ['tax'];
+    delete all.performance.conditions;
+    delete all.notice;
+    delete all.benefitExclusions;
+    all.manual = { prevMonthAdjustment: 120_000, currentMonthAdjustment: 50_000 };
+    all.usage = { 'marriott-airline': 9_000 };
+    all.last4 = '8765';
+    all.memo = '내가 쓴 메모';
+
+    const restored = importStateJson(JSON.stringify(raw));
+    const card = restored.cards.find((c) => c.id === 'marriott-bonvoy-shinhan')!;
+    expect(card.catalogVersion).toBeGreaterThanOrEqual(2);
+    expect(card.performance.excludedCategories).not.toContain('tax');
+    expect(card.performance.conditions?.length).toBeGreaterThan(0);
+    expect(card.notice).toBeTruthy();
+    expect(card.manual).toEqual({ prevMonthAdjustment: 120_000, currentMonthAdjustment: 50_000 });
+    expect(card.usage['marriott-airline']).toBe(9_000);
+    expect(card.last4).toBe('8765');
+    expect(card.memo).toBe('내가 쓴 메모');
+    expect(card.changeHistory.some((h) => h.text.includes('최신 약관'))).toBe(true);
+  });
+
+  it('마이그레이션은 두 번 돌려도 값이 바뀌지 않는다(멱등)', () => {
+    const once = importStateJson(exportStateJson(base()));
+    const twice = importStateJson(exportStateJson(once));
+    expect(twice.cards.map((c) => c.performance.prevThreshold)).toEqual(once.cards.map((c) => c.performance.prevThreshold));
+    expect(twice.cards.every((c) => c.changeHistory.filter((h) => h.text.includes('최신 약관')).length <= 1)).toBe(true);
+  });
+});
+
+describe('AI 비서 — 금액 없는 가맹점/세금 질문', () => {
+  const state = base();
+
+  it('"지방세 내기 좋을 카드"에 세금 적립 제외·실적 인정 카드를 구분해 답한다', () => {
+    const answer = askAssistant('지방세 내기 좋을 카드', state, today);
+    expect(answer.intent).toBe('tax');
+    expect(answer.text).toContain('세금·공과금');
+    expect(answer.text).toContain('적립');
+    expect(answer.text).toContain('전월 실적에 잡히는 카드');
+    expect(answer.text).toContain('메리어트 본보이');
+  });
+
+  it('"CGV 결제에 유리한 카드"는 문화/일반 업종으로 계산하고 간편결제 팁을 준다', () => {
+    const answer = askAssistant('CGV 결제에 유리한 카드', state, today);
+    expect(answer.intent).toBe('place');
+    expect(answer.text).toContain('영화·문화');
+    expect(answer.text).toContain('3만 원'); // 금액을 말하지 않아 3만 원 기준
+    expect(answer.text).toContain('1)');
+    expect(answer.text).toContain('간편결제');
+  });
+
+  it('"스타벅스 카드 추천"은 카페 업종으로 비교한다', () => {
+    const answer = askAssistant('스타벅스 카드 추천', state, today);
+    expect(answer.intent).toBe('place');
+    expect(answer.text).toContain('카페');
+  });
+
+  it('"아파트관리비"처럼 키워드만 있어도 세금·공과금 답변으로 간다', () => {
+    const answer = askAssistant('아파트관리비', state, today);
+    expect(answer.intent).toBe('tax');
+  });
+
+  it('일상 키워드(배달·주유·편의점·병원)도 업종으로 인식한다', () => {
+    expect(askAssistant('배민 결제 카드', state, today).text).toContain('배달앱');
+    expect(askAssistant('주유소 카드 추천', state, today).text).toContain('주유');
+    expect(askAssistant('편의점 결제 유리한 카드', state, today).text).toContain('편의점');
+    expect(askAssistant('병원 결제 카드', state, today).text).toContain('병·의원');
   });
 });

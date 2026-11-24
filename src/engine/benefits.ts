@@ -1,4 +1,4 @@
-import type { BenefitRule, Card, PaymentInput, PointCurrencyId, Verification } from '../types';
+import type { BenefitExclusion, BenefitRule, Card, PaymentInput, PointCurrencyId, Verification } from '../types';
 import { POINT_CURRENCY_MAP } from '../data/categories';
 
 /** 실적 미달 시 "다음 달 예상 사용액" 가정치 (향후 기대 가치 추정에만 사용) */
@@ -10,6 +10,13 @@ export interface BenefitContext {
   prevSpend: number;
   /** 이번 달 이미 받은 혜택(원) */
   usageKrw: number;
+  /**
+   * 같은 공유 한도 묶음(sharedCapGroup)에 속한 규칙들의 이번 달 사용액 합계.
+   * 없으면 usageKrw 만 본다.
+   */
+  groupUsageKrw?: number;
+  /** 적립·할인 제외 업종/가맹점(실적 제외와 분리) */
+  exclusions?: BenefitExclusion;
   pointValues: Record<PointCurrencyId, number>;
 }
 
@@ -70,12 +77,24 @@ export function rateLabel(rule: BenefitRule, pointValues: Record<string, number>
   return `${unit.toLocaleString('ko-KR')}원당 ${rule.pointsPerUnit ?? 0}${unitLabel} (≈${ratePercentOfRule(rule, pointValues).toFixed(2)}%)`;
 }
 
+/**
+ * 카드의 적립·할인 제외 대상에 해당하는 결제인지 확인한다.
+ * (세금·공과금처럼 실적에는 들어가지만 혜택은 안 붙는 결제를 구분하기 위한 것)
+ */
+export function isBenefitExcluded(exclusions: BenefitExclusion | undefined, payment: PaymentInput): boolean {
+  if (!exclusions) return false;
+  if (exclusions.categories.includes(payment.category)) return true;
+  const merchant = payment.merchant.toLowerCase();
+  return exclusions.keywords.some((k) => k && merchant.includes(k.toLowerCase()));
+}
+
 /** 단일 혜택 규칙 평가 */
 export function evaluateBenefit(rule: BenefitRule, ctx: BenefitContext): BenefitEvaluation {
   const { payment, prevSpend, usageKrw, pointValues } = ctx;
   const ratePercent = Number(ratePercentOfRule(rule, pointValues).toFixed(4));
   const cap = capKrwOf(rule, pointValues);
-  const capRemaining = cap === null ? null : Math.max(0, cap - Math.max(0, usageKrw));
+  const usedKrw = Math.max(0, Math.max(usageKrw, ctx.groupUsageKrw ?? 0));
+  const capRemaining = cap === null ? null : Math.max(0, cap - usedKrw);
   const unit = rule.pointCurrencyId ? POINT_CURRENCY_MAP[rule.pointCurrencyId]?.unit ?? 'P' : 'P';
 
   const base: BenefitEvaluation = {
@@ -99,6 +118,9 @@ export function evaluateBenefit(rule: BenefitRule, ctx: BenefitContext): Benefit
 
   if (!rule.categories.includes(payment.category)) {
     return { ...base, blockedReason: '이 업종에는 적용되지 않음' };
+  }
+  if (isBenefitExcluded(ctx.exclusions, payment)) {
+    return { ...base, blockedReason: '적립·할인 제외 대상 결제' };
   }
   if (rule.keywords && rule.keywords.length > 0) {
     const merchant = payment.merchant.toLowerCase();
@@ -145,6 +167,16 @@ export function evaluateBenefit(rule: BenefitRule, ctx: BenefitContext): Benefit
   };
 }
 
+/** 한 규칙의 이번 달 사용액과, 같은 공유 한도 묶음의 합계를 계산한다. */
+export function usageOf(card: Card, rule: BenefitRule): { usageKrw: number; groupUsageKrw?: number } {
+  const usageKrw = Math.max(0, card.usage[rule.id] ?? 0);
+  if (!rule.sharedCapGroup) return { usageKrw };
+  const groupUsageKrw = card.benefits
+    .filter((r) => r.sharedCapGroup === rule.sharedCapGroup)
+    .reduce((sum, r) => sum + Math.max(0, card.usage[r.id] ?? 0), 0);
+  return { usageKrw, groupUsageKrw };
+}
+
 /** 이 카드의 혜택 중 가장 유리한 1개 + 나머지(참고용) */
 export function evaluateCardBenefits(card: Card, ctx: BenefitContext): {
   evaluations: BenefitEvaluation[];
@@ -179,7 +211,7 @@ export function estimateGatedMonthlyValue(card: Card, pointValues: Record<string
 export function describeBenefitRule(rule: BenefitRule, pointValues: Record<string, number>): string {
   const parts = [rateLabel(rule, pointValues)];
   const cap = capKrwOf(rule, pointValues);
-  if (cap !== null) parts.push(`월 한도 ${cap.toLocaleString('ko-KR')}원`);
+  if (cap !== null) parts.push(`${rule.sharedCapGroup ? '통합 ' : ''}월 한도 ${cap.toLocaleString('ko-KR')}원`);
   if (rule.minPrevMonth) parts.push(`전월 ${Math.round(rule.minPrevMonth / 10_000)}만 원 이상`);
   if (rule.requiresDirect) parts.push('직판 조건');
   return parts.join(' · ');

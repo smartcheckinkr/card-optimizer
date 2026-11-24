@@ -1,5 +1,5 @@
 import type { AppState, CategoryId, Card } from '../types';
-import { guessCategory } from '../data/categories';
+import { CATEGORY_LABEL, guessCategory } from '../data/categories';
 import { dDay, monthProgress, todayISO, toMonthKey } from './date';
 import { estimateGatedMonthlyValue, capKrwOf, rateOfRule } from './benefits';
 import { currentMonthSpend, prevMonthSpend } from './performance';
@@ -13,6 +13,12 @@ export interface AssistantAnswer {
 
 const won = (n: number) => `${Math.round(n).toLocaleString('ko-KR')}원`;
 const man = (n: number) => `${Math.round(n / 10_000).toLocaleString('ko-KR')}만 원`;
+/** 갈래가 나뉜 카드의 전월 실적을 '실적 무관'으로 잘못 말하지 않도록 한 줄로 정리 */
+const thresholdText = (card: Card): string => {
+  const { prevThreshold, thresholdScope } = card.performance;
+  if (prevThreshold === 0) return '전월 실적 없음';
+  return `전월 ${man(prevThreshold)}${thresholdScope ? `(${thresholdScope})` : ''}`;
+};
 
 function parseAmount(q: string): number | null {
   const manMatch = q.match(/([\d,]+(?:\.\d+)?)\s*만/);
@@ -24,8 +30,113 @@ function parseAmount(q: string): number | null {
   return null;
 }
 
-function cardShort(card: Card, state: AppState): string {
-  return card.shortName;
+/** 일상 가맹점·세금 키워드 → 업종 + 기본 비교 금액 + 안내 */
+interface MerchantHint {
+  category: CategoryId;
+  label: string;
+  /** 금액 없이 물었을 때 비교 기준 금액 */
+  defaultAmount: number;
+  note?: string;
+}
+
+const MERCHANT_HINTS: { keys: string[]; hint: MerchantHint }[] = [
+  {
+    keys: ['지방세', '국세', '재산세', '자동차세', '취득세', '등록세', '세금', '공과금', '고지서', '4대보험', '건강보험', '국민연금', '건보', '연금', '아파트관리비', '관리비'],
+    hint: { category: 'tax', label: '세금·공과금', defaultAmount: 100_000 },
+  },
+  {
+    keys: ['지하철', '버스', '택시', '카카오t', '카카오 t', '티머니', 'ktx', 'srt', '고속버스', '기차', '교통'],
+    hint: { category: 'transit', label: '대중교통', defaultAmount: 5_000 },
+  },
+  {
+    keys: ['cgv', '씨지브이', '롯데시네마', '메가박스', '영화', '시네마', '공연', '콘서트'],
+    hint: {
+      category: 'general',
+      label: '영화·문화',
+      defaultAmount: 30_000,
+      note: '영화관은 카드사 업종상 문화/일반 가맹점이라 전용 혜택이 거의 없습니다.',
+    },
+  },
+  {
+    keys: ['스타벅스', '투썸', '폴바셋', '커피빈', '커피', '카페', '이디야', '메가커피', '빽다방'],
+    hint: { category: 'dining', label: '카페', defaultAmount: 10_000 },
+  },
+  {
+    keys: ['편의점', 'gs25', 'cu', '세븐일레븐', '이마트24'],
+    hint: { category: 'general', label: '편의점', defaultAmount: 10_000 },
+  },
+  {
+    keys: ['마트', '이마트', '홈플러스', '롯데마트', '농협하나로', '코스트코'],
+    hint: { category: 'general', label: '대형마트', defaultAmount: 100_000 },
+  },
+  {
+    keys: ['병원', '의원', '치과', '한의원', '약국', '의료'],
+    hint: { category: 'general', label: '병·의원', defaultAmount: 30_000 },
+  },
+  {
+    keys: ['배달', '배민', '배달의민족', '쿠팡이츠', '요기요'],
+    hint: { category: 'delivery', label: '배달앱', defaultAmount: 25_000 },
+  },
+  {
+    keys: ['쿠팡', '네이버쇼핑', '11번가', '마켓컬리', '컬리', 'ssg', '아마존', '직구', '온라인'],
+    hint: { category: 'online', label: '온라인쇼핑', defaultAmount: 50_000 },
+  },
+  {
+    keys: ['주유', '주유소', 'gs칼텍스', 's-oil', '오일뱅크', 'sk에너지', '기름'],
+    hint: { category: 'fuel', label: '주유', defaultAmount: 60_000 },
+  },
+  {
+    keys: ['전기차', '충전', '테슬라', '수퍼차저', '슈퍼차저', 'e-pit', '에버온'],
+    hint: { category: 'ev', label: '전기차 충전', defaultAmount: 30_000 },
+  },
+  {
+    keys: ['주차', '하이패스', '통행료', '톨게이트'],
+    hint: { category: 'parking', label: '주차·하이패스', defaultAmount: 10_000 },
+  },
+  {
+    keys: ['넷플릭스', '유튜브', '티빙', '웨이브', '왓챠', '디즈니', '멜론', '스트리밍', '구독'],
+    hint: { category: 'streaming', label: '스트리밍·구독', defaultAmount: 15_000 },
+  },
+  {
+    keys: ['네이버페이', '카카오페이', '토스페이', '삼성페이', 'ssg페이', '페이코', '간편결제'],
+    hint: { category: 'simplepay', label: '간편결제', defaultAmount: 30_000 },
+  },
+  {
+    keys: ['백화점', '신세계', '롯데백화점', '현대백화점', '더현대', '갤러리아'],
+    hint: { category: 'department', label: '백화점', defaultAmount: 300_000 },
+  },
+  {
+    keys: ['면세점', '신라면세점', '롯데면세점', '신세계면세점', '면세'],
+    hint: { category: 'dutyfree', label: '면세점', defaultAmount: 500_000 },
+  },
+  {
+    keys: ['대한항공', '아시아나', '제주항공', '진에어', '항공', '비행기'],
+    hint: { category: 'airline', label: '항공', defaultAmount: 500_000 },
+  },
+  {
+    keys: ['호텔', '숙박', '리조트', '노보텔', '소피텔', '힐튼', '메리어트', '아코르', '하얏트'],
+    hint: { category: 'hotel', label: '호텔·숙박', defaultAmount: 300_000 },
+  },
+  {
+    keys: ['골프', '골프장', '스크린골프'],
+    hint: { category: 'golf', label: '골프', defaultAmount: 200_000 },
+  },
+  {
+    keys: ['식당', '맛집', '음식', '외식', '점심', '저녁', '밥'],
+    hint: { category: 'dining', label: '음식점', defaultAmount: 50_000 },
+  },
+  {
+    keys: ['통신', 'skt', 'kt', 'lg u+', '유플러스', '휴대폰', '핸드폰'],
+    hint: { category: 'general', label: '통신요금', defaultAmount: 60_000, note: '통신요금은 대부분 전월 실적에는 포함되지만 별도 적립 혜택은 없습니다.' },
+  },
+];
+
+function findMerchantHint(q: string): MerchantHint | null {
+  const lower = q.toLowerCase();
+  for (const row of MERCHANT_HINTS) {
+    if (row.keys.some((k) => lower.includes(k))) return row.hint;
+  }
+  return null;
 }
 
 function gatedSummary(card: Card, state: AppState): string {
@@ -64,14 +175,15 @@ function performanceAnswer(state: AppState, today: Date): AssistantAnswer {
 
   rows.forEach((r, i) => {
     if (r.gap <= 0) {
-      lines.push(`${i + 1}) ${cardShort(r.card, state)} — 다음 달 기준 충족 (${man(r.cur)}/${man(r.card.performance.prevThreshold)})`);
+      lines.push(`${i + 1}) ${cardShort(r.card)} — 다음 달 기준 충족 (${man(r.cur)}/${man(r.card.performance.prevThreshold)})`);
     } else {
-      lines.push(`${i + 1}) ${cardShort(r.card, state)} — ${man(r.cur)}/${man(r.card.performance.prevThreshold)} · ${man(r.gap)} 부족`);
+      lines.push(`${i + 1}) ${cardShort(r.card)} — ${man(r.cur)}/${man(r.card.performance.prevThreshold)} · ${man(r.gap)} 부족`);
       lines.push(`   · 채우면 열리는 혜택: ${gatedSummary(r.card, state)}`);
       lines.push(`   · 기대 가치 약 ${won(r.gatedValue)}/월 (추정) · 부족액 대비 ${(r.efficiency * 100).toFixed(1)}%`);
     }
     if (r.prev < r.card.performance.prevThreshold && r.card.performance.prevThreshold > 0) {
       lines.push(`   · 주의: 전월 실적 ${man(r.prev)}로 미달 — 이번 달 혜택은 제한됩니다.`);
+      if (r.card.notice) lines.push(`   · ${r.card.notice}`);
     }
   });
 
@@ -79,7 +191,7 @@ function performanceAnswer(state: AppState, today: Date): AssistantAnswer {
   lines.push('');
   if (firstToFill) {
     lines.push(
-      `먼저 채울 카드는 ${cardShort(firstToFill.card, state)}입니다. ${man(firstToFill.gap)}을 더 쓰면 다음 달 ${won(firstToFill.gatedValue)} 상당 혜택 조건이 열립니다(추정).`,
+      `먼저 채울 카드는 ${cardShort(firstToFill.card)}입니다. ${man(firstToFill.gap)}을 더 쓰면 다음 달 ${won(firstToFill.gatedValue)} 상당 혜택 조건이 열립니다(추정).`,
     );
   } else {
     lines.push('지금은 모든 실적 조건이 채워져 있습니다. 한도 소진만 확인하면 됩니다.');
@@ -88,7 +200,7 @@ function performanceAnswer(state: AppState, today: Date): AssistantAnswer {
   return {
     intent: 'performance',
     text: lines.join('\n'),
-    followUps: ['이번 달 소멸 예정인 혜택은?', '연회비 대비 효율이 가장 낮은 카드는?', '100만 원 분할 결제 유리한가?'],
+    followUps: ['이번 달 소멸 예정인 혜택은?', '연회비 대비 효율이 가장 낮은 카드는?', '지방세 내기 좋을 카드'],
   };
 }
 
@@ -116,8 +228,12 @@ function expiringAnswer(state: AppState, today: Date): AssistantAnswer {
   return {
     intent: 'expiring',
     text: lines.join('\n'),
-    followUps: ['이번 달 어떤 카드 실적을 먼저 채워야 하나요?', '해외에서 어떤 카드를 써야 하나요?'],
+    followUps: ['이번 달 어떤 카드 실적을 먼저 채워야 하나요?', 'CGV 결제에 유리한 카드'],
   };
+}
+
+function cardShort(card: Card): string {
+  return card.shortName;
 }
 
 function recommendText(state: AppState, category: CategoryId, amount: number, merchant: string, today: Date, header: string): string {
@@ -130,10 +246,12 @@ function recommendText(state: AppState, category: CategoryId, amount: number, me
       const line = r.benefitLines[0];
       lines.push(`   · ${line.label}${line.pointsLabel ? ` (${line.pointsLabel})` : ''}${line.capped ? ' — 월 한도 적용' : ''}`);
     }
+    const card = state.cards.find((c) => c.id === r.cardId);
     lines.push(`   · 실적: ${r.performance.threshold === 0 ? '조건 없음' : r.performance.met ? '전월 충족' : '전월 미달'}`);
     lines.push(`   · ${r.futureLabel}`);
     for (const c of r.cautions.slice(0, 2)) lines.push(`   · 주의: ${c}`);
     if (r.promo?.achievable) lines.push(`   · 이벤트: ${r.promo.label} (조건 충족 시 ${won(r.promo.rewardKrw)})`);
+    if (card?.notice && i === 0) lines.push(`   · ${card.notice}`);
   });
   const diff = top.length > 1 ? top[0].immediateKrw - top[1].immediateKrw : 0;
   if (top.length > 1 && diff > 0) {
@@ -145,29 +263,122 @@ function recommendText(state: AppState, category: CategoryId, amount: number, me
   return lines.join('\n');
 }
 
-function overseasAnswer(state: AppState, question: string, today: Date): AssistantAnswer {
-  const amount = parseAmount(question) ?? 500_000;
-  const text = recommendText(
-    state,
-    'overseas',
-    amount,
-    '해외 결제',
-    today,
-    `해외 결제 ${man(amount)} 기준 비교입니다. (외화 결제·해외 가맹점)`,
-  );
+/**
+ * 세금·공과금 전용 답변.
+ * 보유 카드 대부분이 세금을 '적립 제외'로 두기 때문에 일반 추천 순위로는 아무 의미가 없다.
+ * → 실제 약관 데이터로 (1) 적립이 붙는 카드가 있는지, (2) 실적에 잡히는 카드가 있는지를 갈라서 답한다.
+ */
+function taxAnswer(state: AppState, amount: number, today: Date): AssistantAnswer {
+  const results = recommendPayment(state, { amount, category: 'tax', merchant: '지방세' }, today);
+  const withBenefit = results.filter((r) => r.immediateKrw > 0);
+  const perfIncluded = state.cards.filter((c) => !c.performance.excludedCategories.includes('tax'));
+  const perfExcluded = state.cards.filter((c) => c.performance.excludedCategories.includes('tax'));
+
+  const lines: string[] = [`세금·공과금 ${man(amount)} 결제 기준입니다.`, ''];
+
+  if (withBenefit.length === 0) {
+    lines.push('적립·할인은 기대하지 않는 게 맞습니다. 보유 카드 전부 세금·공과금을 적립 제외로 두고 있습니다.');
+  } else {
+    lines.push('세금에도 혜택이 붙는 카드:');
+    withBenefit.slice(0, 3).forEach((r, i) => {
+      lines.push(`${i + 1}) ${r.cardShort} — 약 ${won(r.immediateKrw)}`);
+      if (r.benefitLines[0]) lines.push(`   · ${r.benefitLines[0].label}`);
+    });
+  }
+
+  lines.push('');
+  const perfWithThreshold = perfIncluded.filter((c) => c.performance.prevThreshold > 0);
+  const perfNoThreshold = perfIncluded.filter((c) => c.performance.prevThreshold === 0);
+  if (perfWithThreshold.length > 0) {
+    lines.push('전월 실적에 잡히는 카드(세금을 내면서 실적도 쌓임):');
+    for (const c of perfWithThreshold) {
+      lines.push(`· ${c.shortName} — ${thresholdText(c)}`);
+    }
+    lines.push(`→ 다음 달 실적을 채워야 한다면 ${perfWithThreshold.map((c) => c.shortName).join('·')}로 내는 편이 낫습니다.`);
+  } else {
+    lines.push('전월 실적에 잡히는 카드가 없습니다(모든 카드가 세금을 실적에서 제외).');
+  }
+  if (perfNoThreshold.length > 0) {
+    lines.push('');
+    lines.push(`실적 조건 자체가 없어 세금으로 채울 실적이 없는 카드: ${perfNoThreshold.map((c) => c.shortName).join(', ')}`);
+  }
+  if (perfExcluded.length > 0) {
+    lines.push('');
+    lines.push(`실적에서도 빠지는 카드: ${perfExcluded.map((c) => c.shortName).join(', ')}`);
+  }
+
+  lines.push('');
+  lines.push('※ 세금·공과금은 카드사 공통으로 적립 제외가 일반적이고, 무이자할부도 적용되지 않습니다. 자동이체·간편결제 수수료가 붙는지도 함께 확인하세요.');
   return {
-    intent: 'overseas',
-    text,
-    followUps: ['이번 달 소멸 예정인 혜택은?', `${man(amount)} 분할 결제 유리한가?`],
+    intent: 'tax',
+    text: lines.join('\n'),
+    followUps: ['이번 달 어떤 카드 실적을 먼저 채워야 하나요?', 'CGV 결제에 유리한 카드', `${man(amount)} 결제 카드 추천`],
+  };
+}
+
+/** 간편결제 연계 팁 — 영화관·편의점처럼 전용 혜택이 없는 가맹점에서 유용하다. */
+function simplePayTip(state: AppState): string[] {
+  const lines: string[] = [];
+  for (const card of state.cards) {
+    const rule = card.benefits.find(
+      (b) => b.categories.includes('simplepay') && (b.percent ?? 0) >= 5,
+    );
+    if (!rule) continue;
+    const cap = capKrwOf(rule, state.settings.pointValues);
+    lines.push(
+      `· ${card.shortName}: 간편결제 ${rule.percent}%${rule.minTransaction ? ` (건당 ${won(rule.minTransaction)} 이상)` : ''}` +
+        `${rule.minPrevMonth ? ` · 전월 ${man(rule.minPrevMonth)} 이상` : ''}${cap ? ` · 월 ${won(cap)} 한도` : ''}`,
+    );
+  }
+  return [
+    lines.length > 0
+      ? '💡 간편결제 팁: 삼성페이·네이버페이 등으로 결제하면 아래 카드 혜택을 받을 수 있습니다(가맹점이 간편결제 명의로 승인될 때).'
+      : '💡 간편결제 팁: 이 업종은 카드 전용 혜택이 거의 없습니다. 삼성페이·네이버페이 등 간편결제로 결제하면 간편결제 특화 카드(예: MG+ S 하나 간편결제 10%) 혜택을 받을 수 있으니, 보유 중이라면 앱에 추가해 비교해 보세요.',
+    ...lines,
+  ];
+}
+
+function placeAnswer(state: AppState, question: string, hint: MerchantHint, today: Date): AssistantAnswer {
+  const parsed = parseAmount(question);
+  const amount = parsed ?? hint.defaultAmount;
+  const header = `"${hint.label}" ${man(amount)} 결제 기준 비교입니다.${parsed ? '' : ` (금액을 말하지 않아 ${man(amount)}으로 계산)`}`;
+
+  if (hint.category === 'tax') {
+    return taxAnswer(state, amount, today);
+  }
+
+  const text = recommendText(state, hint.category, amount, question, today, header);
+  const lines = [text];
+  if (hint.note) {
+    lines.push('');
+    lines.push(`※ ${hint.note}`);
+  }
+  if (hint.category === 'general' || hint.category === 'dining') {
+    const tip = simplePayTip(state);
+    if (tip.length > 0) {
+      lines.push('');
+      lines.push(...tip);
+    }
+  }
+  if (hint.category === 'transit') {
+    lines.push('');
+    lines.push('※ 교통카드 충전·고속버스는 카드에 따라 실적·적립에서 빠집니다(특히 우리 ALL은 충전 금액 제외).');
+  }
+  return {
+    intent: 'place',
+    text: lines.join('\n'),
+    followUps: ['이번 달 어떤 카드 실적을 먼저 채워야 하나요?', '이번 달 소멸 예정인 혜택은?', '지방세 내기 좋을 카드'],
   };
 }
 
 function splitAnswer(state: AppState, question: string, today: Date): AssistantAnswer {
   const amount = parseAmount(question) ?? 1_000_000;
-  const category = guessCategory(question) === 'general' ? 'overseas' : guessCategory(question);
+  const hint = findMerchantHint(question);
+  const guessed = hint ? hint.category : guessCategory(question);
+  const category = guessed === 'general' ? 'overseas' : guessed;
   const plan = simulateSplit(state, { amount, category, merchant: '분할 결제' }, today);
   const lines: string[] = [];
-  lines.push(`${man(amount)} 결제를 1만 원 단위로 나눠 배분했을 때입니다. (업종: ${category === 'overseas' ? '해외결제' : category})`);
+  lines.push(`${man(amount)} 결제를 1만 원 단위로 나눠 배분했을 때입니다. (업종: ${CATEGORY_LABEL[category]})`);
   lines.push('');
   if (!plan.splitUseful) {
     lines.push(`분할해도 총 혜택은 단일 카드와 비슷합니다. 단일 카드 최적: ${plan.singleBest?.cardName ?? '-'} 약 ${won(plan.singleBest?.benefitKrw ?? 0)}.`);
@@ -262,32 +473,32 @@ function hotelAnswer(state: AppState, question: string, today: Date): AssistantA
   };
 }
 
-function placeAnswer(state: AppState, question: string, today: Date): AssistantAnswer {
-  const category = guessCategory(question);
-  const amount = parseAmount(question) ?? 300_000;
-  const merchant = question.replace(/\d[\d,]*\s*(만\s*원|원)?/g, '').trim() || '결제 예정';
+function overseasAnswer(state: AppState, question: string, today: Date): AssistantAnswer {
+  const amount = parseAmount(question) ?? 500_000;
   const text = recommendText(
     state,
-    category,
+    'overseas',
     amount,
-    merchant,
+    '해외 결제',
     today,
-    `"${merchant}" ${man(amount)} 결제 기준 추천입니다. (업종: ${category})`,
+    `해외 결제 ${man(amount)} 기준 비교입니다. (외화 결제·해외 가맹점)`,
   );
   return {
-    intent: 'place',
+    intent: 'overseas',
     text,
-    followUps: ['이번 달 어떤 카드 실적을 먼저 채워야 하나요?', '이번 달 소멸 예정인 혜택은?', '100만 원 분할 결제 유리한가?'],
+    followUps: ['이번 달 소멸 예정인 혜택은?', `${man(amount)} 분할 결제 유리한가?`],
   };
 }
 
 export const ASSISTANT_SUGGESTIONS = [
   '이번 달 어떤 카드 실적을 먼저 채워야 하나요?',
   '이번 달 소멸 예정인 혜택은?',
+  '지방세 내기 좋을 카드',
+  'CGV 결제에 유리한 카드',
+  '스타벅스 카드 추천',
   '해외에서 어떤 카드를 써야 하나요?',
   '100만 원 분할 결제 유리한가?',
   '연회비 대비 효율이 가장 낮은 카드는?',
-  '신세계백화점 30만 원 결제 카드 추천',
 ];
 
 export function askAssistant(question: string, state: AppState, today: Date = new Date()): AssistantAnswer {
@@ -307,17 +518,42 @@ export function askAssistant(question: string, state: AppState, today: Date = ne
   if (/(연회비)/.test(q)) return annualFeeAnswer(state, today);
   if (/(한도|잔여|남은 혜택)/.test(q) && !/실적/.test(q)) return limitAnswer(state);
   if (/(실적)/.test(q)) return performanceAnswer(state, today);
-  if (/(힐튼|메리어트|호텔)/.test(q) && !/결제|추천/.test(q)) return hotelAnswer(state, q, today);
-  if (/(해외|일본|유럽|미국|달러|엔화|여행)/.test(q)) return overseasAnswer(state, q, today);
-  if (/(추천|어디|어떤 카드|결제)/.test(q) && (/(신세계|백화점|면세|항공|쿠팡|스타벅스|골프|호텔)/.test(q) || parseAmount(q))) {
-    return placeAnswer(state, q, today);
-  }
   if (/(카드 목록|보유 카드|내 카드)/.test(q)) {
     const lines = ['보유 카드 목록입니다.', ''];
     for (const card of state.cards) {
-      lines.push(`· ${card.name} (${card.issuer} ${card.network}) — 연회비 ${won(card.annualFee)}${card.performance.prevThreshold ? `, 전월 ${man(card.performance.prevThreshold)}` : ', 실적 무관'}`);
+      lines.push(`· ${card.name} (${card.issuer} ${card.network}) — 연회비 ${won(card.annualFee)}, ${thresholdText(card)}`);
     }
     return { intent: 'cards', text: lines.join('\n'), followUps: ASSISTANT_SUGGESTIONS.slice(0, 3) };
+  }
+
+  // 가맹점·업종 키워드가 있으면 금액이 없어도 기본 금액으로 비교한다.
+  const hint = findMerchantHint(q);
+  if (hint) {
+    // 호텔은 '결제/추천' 없이 브랜드만 물으면 보유 혜택 안내가 더 유용하다.
+    if (hint.category === 'hotel' && /(힐튼|메리어트)/.test(q) && !/(결제|추천|유리|좋|쓸|쓸까|어디)/.test(q)) {
+      return hotelAnswer(state, q, today);
+    }
+    return placeAnswer(state, q, hint, today);
+  }
+
+  if (/(해외|일본|유럽|미국|달러|엔화|여행)/.test(q)) return overseasAnswer(state, q, today);
+
+  if (/(추천|유리|좋을|좋은|어떤 카드|어디에|어디서|쓸까)/.test(lower)) {
+    // 가맹점을 못 알아본 경우: 일반 결제로 비교하고 무엇을 몰랐는지 밝힌다.
+    const amount = parseAmount(q) ?? 100_000;
+    const text = recommendText(
+      state,
+      'general',
+      amount,
+      q,
+      today,
+      `업종을 특정하지 못해 '일반' ${man(amount)} 결제로 비교했습니다. 가맹점 이름을 함께 적으면 더 정확합니다.`,
+    );
+    return {
+      intent: 'place',
+      text,
+      followUps: ['지방세 내기 좋을 카드', 'CGV 결제에 유리한 카드', '스타벅스 카드 추천'],
+    };
   }
 
   const usage = state.cards.reduce((s, c) => s + sumUsageKrw(c), 0);

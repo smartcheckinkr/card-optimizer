@@ -50,6 +50,11 @@ export interface BenefitRule {
   categories: CategoryId[];
   /** 가맹점명 일치 조건(소문자 비교). 비어 있으면 업종만 본다. */
   keywords?: string[];
+  /**
+   * 여러 혜택이 하나의 월 한도를 나눠 쓰는 경우의 묶음 이름(예: ALL 특별적립 4,000P).
+   * 같은 카드 안에서 같은 값을 가진 규칙의 이번 달 사용액을 합산해 한도를 계산한다.
+   */
+  sharedCapGroup?: string;
   earnType: 'percent' | 'points';
   /** earnType='percent' */
   percent?: number;
@@ -85,15 +90,48 @@ export interface PromoRule {
   note?: string;
 }
 
+/**
+ * 전월 실적 기준이 여러 갈래인 카드의 상세 조건(예: ALL 인피니트 = 기본 적립 0원 / 특별적립 50만 원).
+ * prevThreshold 는 엔진이 쓰는 대표 기준이고, 이 목록은 화면에 정확히 안내하기 위한 것이다.
+ */
+export interface PerformanceCondition {
+  label: string;
+  /** 이 갈래에 필요한 전월 실적(원). 0 = 실적 무관 */
+  amount: number;
+  note?: string;
+}
+
+/** 적립·할인 제외(실적 제외와 다름 — 실적에는 들어가지만 혜택은 안 붙는 결제) */
+export interface BenefitExclusion {
+  categories: CategoryId[];
+  keywords: string[];
+}
+
 export interface PerformanceRule {
   /** 전월 실적 기준(원). 0이면 실적 무관 카드 */
   prevThreshold: number;
+  /** 이 기준이 무엇에 걸리는 조건인지 짧은 표기(예: '특별적립·프리미엄 서비스') */
+  thresholdScope?: string;
   /** 실적 인정 최소 건당 금액 */
   minPerTransaction: number;
   /** 실적 제외 업종 */
   excludedCategories: CategoryId[];
   /** 실적 제외 가맹점 키워드 */
   excludedKeywords?: string[];
+  /** 전월 실적 기준 상세(카드사 약관의 갈래별 조건) */
+  conditions?: PerformanceCondition[];
+}
+
+/** 카탈로그에서 불러올 때 저장해 두는 상품 조건 스냅샷 — 사용자 수정 여부 판별과 마이그레이션에 쓴다. */
+export interface CatalogConditionSnapshot {
+  catalogVersion: number;
+  annualFee: number;
+  prevThreshold: number;
+  minPerTransaction: number;
+  excludedCategories: CategoryId[];
+  excludedKeywords: string[];
+  benefitExclusions: BenefitExclusion;
+  benefitIds: string[];
 }
 
 export interface Card {
@@ -114,6 +152,14 @@ export interface Card {
   manual: { prevMonthAdjustment: number; currentMonthAdjustment: number };
   /** ruleId → 이번 달 이미 받은 혜택(원) */
   usage: Record<string, number>;
+  /** 적립·할인 제외 업종/가맹점(실적 제외와 분리) */
+  benefitExclusions: BenefitExclusion;
+  /** 카드사 약관 요약 — '0원'만 보고 오해하지 않도록 화면 상단에 띄우는 안내문 */
+  notice?: string;
+  /** 불러온 카탈로그 조건 버전 */
+  catalogVersion?: number;
+  /** 불러온 시점의 카탈로그 값(사용자가 고친 항목을 판별하는 기준) */
+  catalogSnapshot?: CatalogConditionSnapshot;
   verification: Verification;
   sourceNote?: string;
   changeHistory: { date: string; text: string }[];
@@ -204,6 +250,12 @@ export interface CatalogCard {
   annualFeeNote?: string;
   performance: PerformanceRule;
   benefits: BenefitRule[];
+  /** 적립·할인 제외 대상(실적 제외와 별개) */
+  benefitExclusions?: BenefitExclusion;
+  /** 카드 선택 화면·카드 상세에 띄우는 약관 요약 안내 */
+  notice?: string;
+  /** 카드 메모에 미리 채워 넣는 한 줄 요약(사용자가 지우면 유지) */
+  memoHint?: string;
   /** 이벤트(응모형) — 카탈로그에서는 enrolled=false 로 시작 */
   promos?: Omit<PromoRule, 'enrolled'>[];
   walletHints?: CatalogWalletHint[];

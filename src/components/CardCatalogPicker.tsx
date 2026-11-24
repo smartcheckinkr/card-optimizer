@@ -1,8 +1,23 @@
 import { useMemo, useState } from 'react';
 import type { CatalogCard } from '../types';
 import { CATALOG, CATALOG_TAGS, searchCatalog } from '../data/catalog';
+import { CATEGORY_LABEL } from '../data/categories';
 import { formatWon } from '../lib/format';
 import { Badge, VerifyBadge, btnSubtle, inputClass } from './ui';
+
+/** 업종 칩 목록을 짧은 문장으로 — 제외 대상을 한눈에 보여 준다. */
+function exclusionSummary(entry: CatalogCard): string[] {
+  const parts: string[] = [];
+  const perf = entry.performance;
+  if (perf.excludedCategories.length > 0) {
+    parts.push(`실적 제외: ${perf.excludedCategories.map((c) => CATEGORY_LABEL[c]).join('·')}`);
+  }
+  const benefit = entry.benefitExclusions;
+  if (benefit && benefit.categories.length > 0) {
+    parts.push(`적립 제외: ${benefit.categories.map((c) => CATEGORY_LABEL[c]).join('·')}`);
+  }
+  return parts;
+}
 
 /**
  * '+ 카드 추가' 모달 상단의 카탈로그 검색.
@@ -45,6 +60,29 @@ export function CardCatalogPicker({
         <p className="mt-2 text-[10.5px] leading-relaxed text-emerald-900/70">
           아래 항목이 모두 채워졌어요. 숫자만 고쳐서 저장하면 됩니다.
         </p>
+        {selected.performance.conditions && selected.performance.conditions.length > 0 && (
+          <ul className="mt-2 space-y-1 rounded-xl bg-white/70 p-2 ring-1 ring-emerald-100">
+            <li className="text-[9.5px] font-semibold text-emerald-700">전월 실적 조건</li>
+            {selected.performance.conditions.map((c) => (
+              <li key={`${c.label}-${c.amount}`} className="text-[10px] leading-snug text-emerald-900/80">
+                · {c.label} — <span className="font-semibold">{c.amount === 0 ? '실적 무관' : `전월 ${formatWon(c.amount)} 이상`}</span>
+                {c.note ? ` (${c.note})` : ''}
+              </li>
+            ))}
+          </ul>
+        )}
+        {exclusionSummary(selected).length > 0 && (
+          <p className="mt-2 space-y-0.5 text-[10px] leading-relaxed text-emerald-900/70">
+            {exclusionSummary(selected).map((line) => (
+              <span key={line} className="block">· {line}</span>
+            ))}
+          </p>
+        )}
+        {selected.notice && (
+          <p className="mt-2 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[10px] leading-relaxed text-amber-800 ring-1 ring-amber-100">
+            {selected.notice}
+          </p>
+        )}
         <div className="mt-2 flex gap-1.5">
           <button type="button" onClick={onClear} className="rounded-lg bg-white px-2.5 py-1.5 text-[11px] font-medium text-emerald-700 ring-1 ring-emerald-200">
             다른 카드 검색

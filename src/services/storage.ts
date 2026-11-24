@@ -1,6 +1,11 @@
 import type { AppState, Card } from '../types';
 import { createSeedState } from '../data/seed';
-import { CATALOG_BY_ID, catalogToCard } from '../data/catalog';
+import {
+  CATALOG_BY_ID,
+  CATALOG_CONDITIONS_VERSION,
+  applyCatalogConditions,
+  catalogToCard,
+} from '../data/catalog';
 import { todayISO } from '../engine/date';
 
 export const STORAGE_KEY = 'card-optimizer:v1';
@@ -15,27 +20,43 @@ const LEGACY_SEED_MAP: Record<string, string> = {
 };
 
 /**
- * 첫 배포 때 만들어진 샘플 카드는 일부 조건이 예시값이었다.
- * 사용자가 직접 수정한 값(이용실적·수동보정·메모·끝4자리·이벤트 응모)은 보존하고,
- * 상품 조건(연회비·실적 기준·혜택 목록)만 공식 확인값으로 갱신한다.
+ * 저장된 카드를 최신 카탈로그 약관으로 맞춘다.
+ *
+ * - 사용자가 직접 관리하는 값(수동 보정·이번 달 사용액·끝 4자리·메모·이벤트 응모·결제내역)은 그대로 둔다.
+ * - 상품 조건(연회비·전월 실적·제외 업종/키워드·혜택 규칙·안내문)은 카드사 공식 확인값으로 갱신한다.
+ * - 카탈로그에 없는 사용자 추가 혜택은 보존한다.
  */
-function upgradeLegacyCard(card: Card): Card {
-  if (card.catalogId) return card;
-  const catalogId = LEGACY_SEED_MAP[card.id];
+function migrateCard(card: Card): Card {
+  const catalogId = card.catalogId ?? LEGACY_SEED_MAP[card.id];
   const entry = catalogId ? CATALOG_BY_ID[catalogId] : undefined;
   if (!entry) return card;
-  const base = catalogToCard(entry, { id: card.id, last4: card.last4, usage: card.usage ?? {} });
-  return {
-    ...base,
+
+  const isLegacySeed = !card.catalogId;
+  const upToDate = (card.catalogVersion ?? 0) >= CATALOG_CONDITIONS_VERSION;
+  if (!isLegacySeed && upToDate) return card;
+
+  const upgraded = applyCatalogConditions(entry, {
+    ...card,
     last4: card.last4,
     usage: card.usage ?? {},
-    manual: card.manual ?? base.manual,
+    manual: card.manual ?? { prevMonthAdjustment: 0, currentMonthAdjustment: 0 },
     memo: card.memo,
-    promos: card.promos && card.promos.length > 0 ? card.promos : base.promos,
-    createdAt: card.createdAt ?? base.createdAt,
+    promos: card.promos ?? [],
+    createdAt: card.createdAt ?? new Date().toISOString(),
+  });
+
+  // 사용자가 응모해 둔 이벤트 상태는 그대로 둔다.
+  const enrolled = new Map(card.promos.map((p) => [p.id, p.enrolled]));
+  const promos = upgraded.promos.map((p) =>
+    enrolled.has(p.id) ? { ...p, enrolled: enrolled.get(p.id)! } : p,
+  );
+
+  return {
+    ...upgraded,
+    promos,
     changeHistory: [
       ...(card.changeHistory ?? []),
-      { date: todayISO(), text: '상품 조건을 카탈로그 공식 확인값으로 갱신' },
+      { date: todayISO(), text: `상품 조건을 최신 약관(v${CATALOG_CONDITIONS_VERSION})으로 갱신` },
     ],
   };
 }
@@ -73,12 +94,19 @@ export function normalizeState(raw: unknown): AppState {
     annualFee: Number(card.annualFee) || 0,
     performance: {
       prevThreshold: Number(card.performance?.prevThreshold) || 0,
+      thresholdScope: card.performance?.thresholdScope,
       minPerTransaction: Number(card.performance?.minPerTransaction) || 0,
       excludedCategories: Array.isArray(card.performance?.excludedCategories)
         ? (card.performance!.excludedCategories as Card['performance']['excludedCategories'])
-        : (['tax'] as Card['performance']['excludedCategories']),
+        : [],
       excludedKeywords: Array.isArray(card.performance?.excludedKeywords) ? card.performance!.excludedKeywords : [],
+      conditions: Array.isArray(card.performance?.conditions) ? card.performance!.conditions : undefined,
     },
+    benefitExclusions: {
+      categories: Array.isArray(card.benefitExclusions?.categories) ? card.benefitExclusions!.categories : [],
+      keywords: Array.isArray(card.benefitExclusions?.keywords) ? card.benefitExclusions!.keywords : [],
+    },
+    catalogVersion: typeof card.catalogVersion === 'number' ? card.catalogVersion : undefined,
     benefits: Array.isArray(card.benefits) ? card.benefits : [],
     promos: Array.isArray(card.promos) ? card.promos : [],
     manual: {
@@ -89,7 +117,7 @@ export function normalizeState(raw: unknown): AppState {
     verification: card.verification === 'official' ? 'official' : 'example',
     changeHistory: Array.isArray(card.changeHistory) ? card.changeHistory : [],
     createdAt: card.createdAt || new Date().toISOString(),
-  })).map(upgradeLegacyCard);
+  })).map(migrateCard);
 
   return {
     version: 1,

@@ -19,15 +19,23 @@ const emptyCard = (): Card => ({
   network: 'LOCAL',
   theme: 'navy',
   annualFee: 0,
-  performance: { prevThreshold: 0, minPerTransaction: 0, excludedCategories: ['tax'], excludedKeywords: [] },
+  performance: { prevThreshold: 0, minPerTransaction: 0, excludedCategories: [], excludedKeywords: [] },
   benefits: [],
   promos: [],
   manual: { prevMonthAdjustment: 0, currentMonthAdjustment: 0 },
   usage: {},
+  benefitExclusions: { categories: [], keywords: [] },
   verification: 'example',
   changeHistory: [{ date: todayISO(), text: '사용자 직접 추가' }],
   createdAt: new Date().toISOString(),
 });
+
+/** 전월 실적 기준 문구 — 갈래가 나뉜 카드는 무엇에 걸리는 조건인지 함께 보여 준다. */
+export function thresholdLabel(card: Card): string {
+  const { prevThreshold, thresholdScope } = card.performance;
+  if (prevThreshold === 0) return '전월 실적 조건 없음';
+  return `전월 ${formatWon(prevThreshold)} 이상${thresholdScope ? ` (${thresholdScope})` : ''}`;
+}
 
 const emptyBenefit = (): BenefitRule => ({
   id: `rule-${Date.now().toString(36)}`,
@@ -82,8 +90,13 @@ export function CardsScreen({ onOpenSettings }: { onOpenSettings: () => void }) 
                   <VerifyBadge verification={card.verification} />
                 </div>
                 <p className="mt-0.5 text-[10.5px] text-slate-400">
-                  연회비 {formatWon(card.annualFee)} · {threshold === 0 ? '전월 실적 조건 없음' : `전월 ${formatWon(threshold)} 이상`}
+                  연회비 {formatWon(card.annualFee)} · {thresholdLabel(card)}
                 </p>
+                {card.notice && (
+                  <p className="mt-2 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[10px] leading-relaxed text-amber-800 ring-1 ring-amber-100">
+                    {card.notice}
+                  </p>
+                )}
 
                 <div className="mt-2.5">
                   <div className="mb-1 flex items-center justify-between text-[10.5px]">
@@ -181,7 +194,7 @@ function TransactionRow({ tx }: { tx: Transaction }) {
   );
 }
 
-function CategoryMulti({ value, onChange }: { value: CategoryId[]; onChange: (next: CategoryId[]) => void }) {
+function CategoryMulti({ value, onChange, tone = 'ink' }: { value: CategoryId[]; onChange: (next: CategoryId[]) => void; tone?: 'ink' | 'rose' }) {
   return (
     <div className="flex flex-wrap gap-1.5">
       {CATEGORIES.map((c) => {
@@ -191,12 +204,65 @@ function CategoryMulti({ value, onChange }: { value: CategoryId[]; onChange: (ne
             key={c.id}
             type="button"
             onClick={() => onChange(active ? value.filter((v) => v !== c.id) : [...value, c.id])}
-            className={`rounded-lg px-2 py-1 text-[10.5px] font-medium transition ${active ? 'bg-ink text-white' : 'bg-slate-100 text-slate-500'}`}
+            className={`rounded-lg px-2 py-1 text-[10.5px] font-medium transition ${
+              active ? (tone === 'rose' ? 'bg-rose-500 text-white' : 'bg-ink text-white') : 'bg-slate-100 text-slate-500'
+            }`}
           >
             {c.label}
           </button>
         );
       })}
+    </div>
+  );
+}
+
+/** 키워드를 칩으로 보여 주고 ×로 지우거나 입력해서 더한다(쉼표 없이도 입력 가능). */
+function KeywordChips({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value: string[];
+  onChange: (next: string[]) => void;
+  placeholder?: string;
+}) {
+  const [text, setText] = useState('');
+  const add = () => {
+    const v = text.trim();
+    if (!v) return;
+    if (!value.includes(v)) onChange([...value, v]);
+    setText('');
+  };
+  return (
+    <div className="rounded-xl bg-slate-50 p-2 ring-1 ring-slate-200">
+      <div className="flex flex-wrap gap-1">
+        {value.length === 0 && <span className="px-1 py-0.5 text-[10.5px] text-slate-400">없음</span>}
+        {value.map((k) => (
+          <span key={k} className="inline-flex items-center gap-1 rounded-md bg-white px-1.5 py-0.5 text-[10.5px] text-slate-600 ring-1 ring-slate-200">
+            {k}
+            <button type="button" onClick={() => onChange(value.filter((v) => v !== k))} className="text-slate-400" aria-label={`${k} 삭제`}>
+              ×
+            </button>
+          </span>
+        ))}
+      </div>
+      <div className="mt-1.5 flex gap-1">
+        <input
+          className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px]"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              add();
+            }
+          }}
+          placeholder={placeholder ?? '가맹점 키워드 추가'}
+        />
+        <button type="button" onClick={add} className="rounded-lg bg-white px-2 py-1 text-[11px] font-medium text-indigo-600 ring-1 ring-slate-200">
+          추가
+        </button>
+      </div>
     </div>
   );
 }
@@ -364,6 +430,24 @@ function CardEditor({ card, onClose }: { card: Card; onClose: () => void }) {
 
       <Panel className="space-y-3">
         <p className="text-[12.5px] font-bold text-ink">실적 기준</p>
+        {draft.notice && (
+          <p className="rounded-xl bg-amber-50 px-3 py-2 text-[10.5px] leading-relaxed text-amber-800 ring-1 ring-amber-100">
+            {draft.notice}
+          </p>
+        )}
+        {draft.performance.conditions && draft.performance.conditions.length > 0 && (
+          <div className="rounded-xl bg-slate-50 p-2.5">
+            <p className="text-[10.5px] font-semibold text-slate-600">카드사 약관의 전월 실적 갈래</p>
+            <ul className="mt-1 space-y-0.5">
+              {draft.performance.conditions.map((c) => (
+                <li key={`${c.label}-${c.amount}`} className="text-[10px] leading-snug text-slate-500">
+                  · {c.label} — <span className="font-medium text-slate-700">{c.amount === 0 ? '실적 무관' : formatWon(c.amount)}</span>
+                  {c.note ? ` (${c.note})` : ''}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         <div className="grid grid-cols-2 gap-2">
           <Field label="전월 실적 기준(원)" hint="0 = 실적 무관">
             <input
@@ -373,7 +457,7 @@ function CardEditor({ card, onClose }: { card: Card; onClose: () => void }) {
               onChange={(e) => patch({ performance: { ...draft.performance, prevThreshold: parseAmountInput(e.target.value) } })}
             />
           </Field>
-          <Field label="건당 최소 인정금액">
+          <Field label="건당 최소 인정금액" hint="0 = 제한 없음">
             <input
               className={inputClass}
               inputMode="numeric"
@@ -382,17 +466,38 @@ function CardEditor({ card, onClose }: { card: Card; onClose: () => void }) {
             />
           </Field>
         </div>
-        <Field label="실적 제외 업종">
+        <Field label="실적 제외 업종" hint="이 업종 결제는 전월 실적에 안 들어갑니다">
           <CategoryMulti value={draft.performance.excludedCategories} onChange={(v) => patch({ performance: { ...draft.performance, excludedCategories: v } })} />
         </Field>
-        <Field label="실적 제외 가맹점 키워드" hint="쉼표 구분">
-          <input
-            className={inputClass}
-            value={(draft.performance.excludedKeywords ?? []).join(', ')}
-            onChange={(e) => patch({ performance: { ...draft.performance, excludedKeywords: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) } })}
-            placeholder="상품권, 등록금"
+        <Field label="실적 제외 가맹점 키워드" hint="탭해서 삭제">
+          <KeywordChips
+            value={draft.performance.excludedKeywords ?? []}
+            onChange={(v) => patch({ performance: { ...draft.performance, excludedKeywords: v } })}
+            placeholder="예: 상품권, 교통카드 충전"
           />
         </Field>
+        <div className="rounded-xl bg-rose-50/60 p-2.5 ring-1 ring-rose-100">
+          <p className="text-[10.5px] font-semibold text-rose-700">적립·할인 제외 (실적에는 들어가도 혜택은 없음)</p>
+          <p className="mt-0.5 text-[9.5px] leading-relaxed text-rose-500/80">
+            세금·공과금처럼 실적에는 잡히지만 적립은 안 붙는 결제를 여기에 둡니다.
+          </p>
+          <div className="mt-2 space-y-2">
+            <CategoryMulti
+              value={draft.benefitExclusions?.categories ?? []}
+              onChange={(v) =>
+                patch({ benefitExclusions: { categories: v, keywords: draft.benefitExclusions?.keywords ?? [] } })
+              }
+              tone="rose"
+            />
+            <KeywordChips
+              value={draft.benefitExclusions?.keywords ?? []}
+              onChange={(v) =>
+                patch({ benefitExclusions: { categories: draft.benefitExclusions?.categories ?? [], keywords: v } })
+              }
+              placeholder="예: 등록금, 수도요금"
+            />
+          </div>
+        </div>
         <div className="rounded-xl bg-slate-50 p-3">
           <p className="text-[11px] font-semibold text-slate-600">실적 수동 보정 (카드사 공식 실적과 다를 때)</p>
           <div className="mt-2 grid grid-cols-2 gap-2">
@@ -428,7 +533,7 @@ function CardEditor({ card, onClose }: { card: Card; onClose: () => void }) {
             <div className="flex items-start justify-between gap-2">
               <button className="min-w-0 flex-1 text-left" onClick={() => setOpenRule(openRule === rule.id ? null : rule.id)}>
                 <p className="truncate text-[12px] font-medium text-slate-700">{rule.label}</p>
-                <p className="text-[10px] text-slate-400">{rateLabel(rule, state.settings.pointValues)}{capKrwOf(rule, state.settings.pointValues) !== null ? ` · 월 한도 ${formatWon(capKrwOf(rule, state.settings.pointValues)!)}` : ''}</p>
+                <p className="text-[10px] text-slate-400">{rateLabel(rule, state.settings.pointValues)}{capKrwOf(rule, state.settings.pointValues) !== null ? ` · ${rule.sharedCapGroup ? '통합 ' : ''}월 한도 ${formatWon(capKrwOf(rule, state.settings.pointValues)!)}` : ''}</p>
               </button>
               <div className="flex shrink-0 items-center gap-1">
                 <VerifyBadge verification={rule.verification} />

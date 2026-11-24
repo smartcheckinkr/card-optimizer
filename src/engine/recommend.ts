@@ -3,7 +3,9 @@ import {
   capKrwOf,
   estimateGatedMonthlyValue,
   evaluateBenefit,
+  isBenefitExcluded,
   rateOfRule,
+  usageOf,
   type BenefitEvaluation,
 } from './benefits';
 import {
@@ -140,7 +142,8 @@ export function evaluateCardPayment(
     evaluateBenefit(rule, {
       payment: input,
       prevSpend,
-      usageKrw: card.usage[rule.id] ?? 0,
+      ...usageOf(card, rule),
+      exclusions: card.benefitExclusions,
       pointValues: state.settings.pointValues,
     }),
   );
@@ -198,6 +201,9 @@ export function evaluateCardPayment(
 
   if (!paymentEligible) {
     cautions.push('이 결제는 이 카드의 실적 인정 조건(업종·건당 최소금액)에 해당하지 않습니다.');
+  }
+  if (isBenefitExcluded(card.benefitExclusions, input)) {
+    cautions.push('이 결제는 이 카드의 적립·할인 제외 대상입니다(세금·공과금 등).');
   }
   if (input.category === 'overseas') {
     cautions.push('해외 결제는 카드사 해외이용수수료(약 1~1.5%)가 별도로 붙을 수 있습니다.');
@@ -318,11 +324,19 @@ export function simulateSplit(
   const benefitAt = (card: Card, amountSoFar: number, extra: number): { gain: number; ruleId?: string } => {
     if (extra <= 0) return { gain: 0 };
     const usage = usageSim.get(card.id) ?? {};
+    const groupUsage = (rule: (typeof card.benefits)[number]): number | undefined => {
+      if (!rule.sharedCapGroup) return undefined;
+      return card.benefits
+        .filter((r) => r.sharedCapGroup === rule.sharedCapGroup)
+        .reduce((sum, r) => sum + Math.max(0, usage[r.id] ?? 0), 0);
+    };
     const evals = card.benefits.map((rule) =>
       evaluateBenefit(rule, {
         payment: { ...input, amount: amountSoFar + extra },
         prevSpend: prevMonthSpend(card, state.transactions, today),
-        usageKrw: usage[rule.id] ?? 0,
+        usageKrw: Math.max(0, usage[rule.id] ?? 0),
+        groupUsageKrw: groupUsage(rule),
+        exclusions: card.benefitExclusions,
         pointValues: state.settings.pointValues,
       }),
     );
@@ -331,7 +345,9 @@ export function simulateSplit(
       evaluateBenefit(rule, {
         payment: { ...input, amount: amountSoFar },
         prevSpend: prevMonthSpend(card, state.transactions, today),
-        usageKrw: usage[rule.id] ?? 0,
+        usageKrw: Math.max(0, usage[rule.id] ?? 0),
+        groupUsageKrw: groupUsage(rule),
+        exclusions: card.benefitExclusions,
         pointValues: state.settings.pointValues,
       }),
     );
