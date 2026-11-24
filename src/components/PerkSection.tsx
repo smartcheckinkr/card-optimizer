@@ -352,19 +352,27 @@ export function UserPerkSection({
   );
 }
 
-const emptyPromo = (): PromoRule => ({
-  id: `promo-${Date.now().toString(36)}`,
-  label: '',
-  description: '',
-  categories: ['general'],
-  minSpend: 0,
-  rewardKrw: 0,
-  startsAt: '',
-  expiresAt: '',
-  enrolled: false,
-  verification: 'user',
-  note: '',
-});
+const isoDate = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+/** 새 이벤트는 오늘~30일 뒤를 기본 기간으로 채운다(그대로 저장해도 되고 직접 고쳐도 된다). */
+const emptyPromo = (today: Date = new Date()): PromoRule => {
+  const end = new Date(today);
+  end.setDate(end.getDate() + 30);
+  return {
+    id: `promo-${Date.now().toString(36)}`,
+    label: '',
+    description: '',
+    categories: ['general'],
+    minSpend: 0,
+    rewardKrw: 0,
+    startsAt: isoDate(today),
+    expiresAt: isoDate(end),
+    enrolled: false,
+    verification: 'user',
+    note: '',
+  };
+};
 
 function CategoryChips({ value, onChange }: { value: CategoryId[]; onChange: (v: CategoryId[]) => void }) {
   return (
@@ -402,7 +410,7 @@ export function PromoSection({
     <div className="space-y-2">
       <div className="flex items-center justify-between">
         <p className="text-[12.5px] font-bold text-ink">이벤트(기간 한정) {promos.length}개</p>
-        <button type="button" onClick={() => setDraft(emptyPromo())} className="rounded-lg bg-slate-100 px-2.5 py-1.5 text-[12px] font-medium text-slate-600">
+        <button type="button" onClick={() => setDraft(emptyPromo(today))} className="rounded-lg bg-slate-100 px-2.5 py-1.5 text-[12px] font-medium text-slate-600">
           + 이벤트 추가
         </button>
       </div>
