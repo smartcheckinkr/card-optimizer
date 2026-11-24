@@ -177,6 +177,9 @@ projects/card-optimizer/
 
 ## 8. 배포 방법
 
+> **현재 배포 주소: https://smartcheckinkr.github.io/card-optimizer/** (GitHub Pages, `gh-pages` 브랜치)
+> 수정 후 다시 배포하려면 `npm run build` 결과를 `gh-pages` 브랜치로 올리면 됩니다.
+
 빌드 결과(`dist/`)는 정적 파일이므로 어디서나 호스팅할 수 있습니다.
 
 - **Vercel / Netlify**: 프로젝트 루트를 `projects/card-optimizer`로 지정, Build `npm run build`, Output `dist`
@@ -184,7 +187,8 @@ projects/card-optimizer/
   `dist/`를 `gh-pages` 브랜치로 올리면 됩니다.
 - **사내/개인 서버**: `dist/`를 정적 서버(python -m http.server, nginx 등)로 서빙
 
-> 현재 저장소 푸시·외부 배포는 하지 않았습니다. 필요하면 확인 후 진행하세요.
+> 소스는 `main` 브랜치, 배포 산출물(`dist/`)은 `gh-pages` 브랜치에 있습니다.
+> GitHub Pages는 `gh-pages` 브랜치 루트를 배포 소스로 사용합니다(`.nojekyll` 포함).
 
 ---
 
