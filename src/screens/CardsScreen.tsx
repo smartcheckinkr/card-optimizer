@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useCardStore } from '../state/store';
-import type { BenefitRule, Card, CategoryId, PointCurrencyId, Transaction, Verification } from '../types';
+import type { BenefitRule, Card, CatalogCard, CategoryId, PointCurrencyId, Transaction, Verification } from '../types';
 import { CATEGORIES, CATEGORY_LABEL, POINT_CURRENCIES } from '../data/categories';
+import { CATALOG_BY_ID, catalogToCard, walletItemsFromHints } from '../data/catalog';
+import { CardCatalogPicker } from '../components/CardCatalogPicker';
 import { currentMonthSpend, prevMonthSpend } from '../engine/performance';
 import { describeBenefitRule, capKrwOf, rateLabel } from '../engine/benefits';
 import { formatWon, parseAmountInput } from '../lib/format';
@@ -200,15 +202,45 @@ function CategoryMulti({ value, onChange }: { value: CategoryId[]; onChange: (ne
 }
 
 function CardEditor({ card, onClose }: { card: Card; onClose: () => void }) {
-  const { state, saveCard } = useCardStore();
+  const { state, saveCard, addWalletItem } = useCardStore();
+  const isNew = !state.cards.some((c) => c.id === card.id);
   const [draft, setDraft] = useState<Card>(card);
   const [openRule, setOpenRule] = useState<string | null>(null);
   const [newRule, setNewRule] = useState<BenefitRule | null>(null);
+  const [pickerMode, setPickerMode] = useState<'search' | 'picked' | 'manual'>(
+    isNew ? (card.catalogId ? 'picked' : 'search') : 'manual',
+  );
+  const [catalogEntry, setCatalogEntry] = useState<CatalogCard | null>(
+    card.catalogId ? CATALOG_BY_ID[card.catalogId] ?? null : null,
+  );
+  const [includeWallet, setIncludeWallet] = useState(true);
 
   useEffect(() => setDraft(card), [card]);
 
   const patch = (p: Partial<Card>) => setDraft((d) => ({ ...d, ...p }));
-  const isNew = !state.cards.some((c) => c.id === draft.id);
+
+  const pickCatalog = (entry: CatalogCard) => {
+    const next = catalogToCard(entry, { id: draft.id, last4: draft.last4 });
+    setDraft(next);
+    setCatalogEntry(entry);
+    setIncludeWallet(true);
+    setPickerMode('picked');
+  };
+
+  const handleSave = () => {
+    saveCard(draft);
+    if (isNew && includeWallet && catalogEntry?.walletHints?.length) {
+      for (const item of walletItemsFromHints(catalogEntry, draft.id)) {
+        const { id: _ignored, ...rest } = item;
+        addWalletItem(rest);
+      }
+    }
+    onClose();
+  };
+
+  const ownedCatalogIds = state.cards
+    .map((c) => c.catalogId)
+    .filter((id): id is string => Boolean(id));
 
   return (
     <Sheet
@@ -219,18 +251,64 @@ function CardEditor({ card, onClose }: { card: Card; onClose: () => void }) {
       footer={
         <div className="flex gap-2">
           <button onClick={onClose} className={`${btnGhost} flex-1`}>취소</button>
-          <button
-            onClick={() => {
-              saveCard(draft);
-              onClose();
-            }}
-            className={`${btnPrimary} flex-1`}
-          >
+          <button onClick={handleSave} className={`${btnPrimary} flex-1`}>
             저장
           </button>
         </div>
       }
     >
+      {isNew && pickerMode === 'search' && (
+        <CardCatalogPicker
+          selected={null}
+          onPick={pickCatalog}
+          onClear={() => setPickerMode('search')}
+          onManual={() => setPickerMode('manual')}
+          existingCatalogIds={ownedCatalogIds}
+        />
+      )}
+      {isNew && pickerMode === 'picked' && catalogEntry && (
+        <>
+          <CardCatalogPicker
+            selected={catalogEntry}
+            onPick={pickCatalog}
+            onClear={() => {
+              setCatalogEntry(null);
+              setPickerMode('search');
+            }}
+            onManual={() => setPickerMode('manual')}
+            existingCatalogIds={ownedCatalogIds}
+          />
+          {catalogEntry.walletHints && catalogEntry.walletHints.length > 0 && (
+            <label className="flex items-start justify-between gap-2 rounded-xl bg-indigo-50/70 px-3 py-2.5 ring-1 ring-indigo-100">
+              <span className="min-w-0">
+                <span className="block text-[11.5px] font-semibold text-indigo-700">
+                  지갑에 대표 바우처 {catalogEntry.walletHints.length}개도 함께 추가
+                </span>
+                <span className="mt-0.5 block text-[10.5px] leading-relaxed text-indigo-700/70">
+                  {catalogEntry.walletHints.map((h) => h.title).slice(0, 3).join(' · ')}
+                  {catalogEntry.walletHints.length > 3 ? ' 외' : ''}
+                </span>
+              </span>
+              <input
+                type="checkbox"
+                checked={includeWallet}
+                onChange={(e) => setIncludeWallet(e.target.checked)}
+                className="mt-1 h-4 w-4 shrink-0 accent-indigo-600"
+              />
+            </label>
+          )}
+        </>
+      )}
+      {isNew && pickerMode === 'manual' && (
+        <button
+          type="button"
+          onClick={() => setPickerMode('search')}
+          className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-white py-2.5 text-[11.5px] font-medium text-indigo-600 ring-1 ring-slate-200"
+        >
+          🔍 카탈로그에서 카드 검색해서 채우기
+        </button>
+      )}
+
       <Panel className="space-y-3">
         <Field label="카드 별칭" hint="목록에 표시">
           <input className={inputClass} value={draft.shortName} onChange={(e) => patch({ shortName: e.target.value })} />
@@ -269,7 +347,7 @@ function CardEditor({ card, onClose }: { card: Card; onClose: () => void }) {
           </Field>
         </div>
         <div className="grid grid-cols-2 gap-2">
-          <Field label="연회비(원)">
+          <Field label="연회비(원)" hint={catalogEntry?.annualFeeNote}>
             <input className={inputClass} inputMode="numeric" value={draft.annualFee ? draft.annualFee.toLocaleString('ko-KR') : ''} onChange={(e) => patch({ annualFee: parseAmountInput(e.target.value) })} />
           </Field>
           <Field label="데이터 신뢰도">

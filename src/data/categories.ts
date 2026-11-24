@@ -10,6 +10,12 @@ export const CATEGORIES: { id: CategoryId; label: string; emoji: string; hint: s
   { id: 'golf', label: '골프', emoji: '⛳', hint: '골프장·골프용품' },
   { id: 'hotel', label: '호텔·숙박', emoji: '🏨', hint: '호텔 공홈·부킹닷컴' },
   { id: 'transit', label: '대중교통', emoji: '🚇', hint: '지하철·버스·택시' },
+  { id: 'ev', label: '전기차 충전', emoji: '🔌', hint: '환경부·테슬라·E-Pit 등' },
+  { id: 'delivery', label: '배달앱', emoji: '🛵', hint: '배달의민족·쿠팡이츠' },
+  { id: 'streaming', label: '스트리밍·구독', emoji: '📺', hint: '넷플릭스·유튜브·멤버십' },
+  { id: 'parking', label: '주차·하이패스', emoji: '🅿️', hint: '주차장·고속도로 통행료' },
+  { id: 'fuel', label: '주유', emoji: '⛽', hint: '주유소·충전소(LPG)' },
+  { id: 'simplepay', label: '간편결제', emoji: '📱', hint: '네이버페이·카카오페이 등' },
   { id: 'tax', label: '세금·공과금', emoji: '🧾', hint: '대부분 실적 제외' },
   { id: 'general', label: '일반', emoji: '💳', hint: '위 업종에 해당 없음' },
 ];
@@ -30,7 +36,11 @@ export const POINT_CURRENCIES: PointCurrency[] = [
   { id: 'skypass', name: '스카이패스 마일', unit: '마일', defaultWonPerUnit: 15, note: '이코노미 15원, 비즈니스 25원 이상' },
   { id: 'mr', name: 'MR 포인트', unit: 'P', defaultWonPerUnit: 1, note: '현금성 1P=1원, 항공 전환 15:1' },
   { id: 'krw', name: '포인트(1P=1원)', unit: 'P', defaultWonPerUnit: 1, note: '국내 포인트 일반' },
-  { id: 'npay', name: '네이버페이 포인트', unit: '원', defaultWonPerUnit: 1, note: '1P=1원' },
+  { id: 'npay', name: '네이버페이 포인트', unit: 'P', defaultWonPerUnit: 1, note: '1P=1원' },
+  { id: 'all', name: 'ALL 리워드 포인트', unit: 'P', defaultWonPerUnit: 30, note: '1P=€0.02 (약 30원)' },
+  { id: 'eco', name: '에코머니 포인트', unit: 'P', defaultWonPerUnit: 1, note: '1P=1원' },
+  { id: 'hana', name: '하나머니', unit: 'P', defaultWonPerUnit: 1, note: '1P=1원' },
+  { id: 'm', name: 'M포인트', unit: 'P', defaultWonPerUnit: 1, note: '사용처에 따라 0.7~1원' },
 ];
 
 export const POINT_CURRENCY_MAP: Record<PointCurrencyId, PointCurrency> = POINT_CURRENCIES.reduce(
@@ -53,13 +63,19 @@ export const WALLET_KIND_LABEL: Record<string, string> = {
 export function guessCategory(merchant: string): CategoryId {
   const m = merchant.toLowerCase();
   const rules: [CategoryId, string[]][] = [
+    ['ev', ['전기차', '충전', '테슬라', 'supercharger', 'ev 충전', '파워큐브', '에버온', '일렉링크']],
+    ['delivery', ['배달', '배민', '쿠팡이츠', '요기요']],
+    ['streaming', ['넷플릭스', 'netflix', '유튜브', 'youtube', '디즈니', '티빙', '웨이브', '왓챠', '멜론', '플로', '멤버십']],
+    ['parking', ['주차', '하이패스', '통행료', 'parking']],
+    ['fuel', ['주유', 'gs칼텍스', 's-oil', '오일뱅크', 'sk에너지']],
     ['dutyfree', ['면세', 'duty free', 'dutyfree']],
     ['department', ['백화점', '신세계', '롯데백', '현대백', '더현대']],
     ['airline', ['대한항공', '아시아나', 'korean air', '항공', 'airline']],
-    ['hotel', ['호텔', 'hotel', '메리어트', '힐튼', '하얏트', '리츠', '부킹', 'booking', '아고다', 'airbnb']],
+    ['hotel', ['호텔', 'hotel', '메리어트', '힐튼', '하얏트', '리츠', '부킹', 'booking', '아고다', 'airbnb', '노보텔', '소피텔']],
     ['golf', ['골프', 'golf', 'cc']],
     ['online', ['쿠팡', '네이버쇼핑', '11번가', '마켓컬리', 'amazon', '아마존']],
-    ['transit', ['지하철', '버스', '택시', '카카오t', '티머니']],
+    ['transit', ['지하철', '버스', '택시', '카카오t', '티머니', 'ktx', 'srt']],
+    ['simplepay', ['네이버페이', '카카오페이', '토스페이', '스마일페이', 'ssg페이']],
     ['tax', ['국세', '지방세', '공과금', '관리비', '건강보험', '도시가스', '한국전력']],
     ['dining', ['식당', '음식', '카페', '스타벅스', '커피', '베이커리', 'restaurant']],
   ];

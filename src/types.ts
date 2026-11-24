@@ -12,13 +12,29 @@ export type CategoryId =
   | 'golf' // 골프
   | 'hotel' // 호텔/숙박
   | 'transit' // 대중교통
+  | 'ev' // 전기차 충전
+  | 'delivery' // 배달앱
+  | 'streaming' // 스트리밍·구독
+  | 'parking' // 주차·하이패스
+  | 'fuel' // 주유
+  | 'simplepay' // 간편결제(네이버페이·카카오페이 등)
   | 'tax' // 세금·공과금(대부분 실적 제외)
   | 'general'; // 일반
 
 /** official: 카드사 공식 자료로 확인된 값 · example: 공식 확인 전 예시값 */
 export type Verification = 'official' | 'example';
 
-export type PointCurrencyId = 'bonvoy' | 'hilton' | 'skypass' | 'mr' | 'krw' | 'npay';
+export type PointCurrencyId =
+  | 'bonvoy'
+  | 'hilton'
+  | 'skypass'
+  | 'mr'
+  | 'krw'
+  | 'npay'
+  | 'all' // ALL 리워드 포인트(아코르)
+  | 'eco' // 에코머니 포인트(그린카드, 1P=1원)
+  | 'hana' // 하나머니(1P=1원)
+  | 'm'; // M포인트(현대카드)
 
 export interface PointCurrency {
   id: PointCurrencyId;
@@ -82,6 +98,8 @@ export interface PerformanceRule {
 
 export interface Card {
   id: string;
+  /** 카탈로그에서 불러온 경우 원본 상품 키(중복 등록 확인용) */
+  catalogId?: string;
   name: string;
   shortName: string;
   issuer: string;
@@ -154,4 +172,50 @@ export interface PaymentInput {
   amount: number;
   category: CategoryId;
   merchant: string;
+}
+
+/** 카탈로그에서 카드를 고르면 지갑에 함께 추가할 수 있는 대표 바우처 */
+export interface CatalogWalletHint {
+  title: string;
+  kind: WalletKind;
+  total: number;
+  /** 기본값은 total */
+  remaining?: number;
+  unit: string;
+  /** 오늘 기준 연도 말일 등 상대 표기를 쓰려면 'YEAR-END' */
+  expiresAt?: string;
+  conditions?: string;
+  howTo?: string;
+  valueKrw?: number;
+  verification: Verification;
+  note?: string;
+}
+
+/** '+ 카드 추가' 화면의 카드 검색 카탈로그 항목(공식 상품 조건 기반) */
+export interface CatalogCard {
+  id: string;
+  name: string;
+  shortName: string;
+  issuer: string;
+  network: Card['network'];
+  theme: Card['theme'];
+  /** 대표(해외겸용) 연회비 */
+  annualFee: number;
+  annualFeeNote?: string;
+  performance: PerformanceRule;
+  benefits: BenefitRule[];
+  /** 이벤트(응모형) — 카탈로그에서는 enrolled=false 로 시작 */
+  promos?: Omit<PromoRule, 'enrolled'>[];
+  walletHints?: CatalogWalletHint[];
+  /** 검색 보조 키워드 */
+  aliases: string[];
+  /** 빠른 선택 칩 */
+  tags: string[];
+  verification: Verification;
+  /** 확인 출처(카드사 공식 페이지 등) */
+  source: string;
+  sourceNote: string;
+  /** 신규 발급 중단 등 상태 안내 */
+  status?: 'active' | 'discontinued';
+  statusNote?: string;
 }
