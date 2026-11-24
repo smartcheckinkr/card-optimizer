@@ -382,6 +382,7 @@ function placeAnswer(state: AppState, question: string, hint: MerchantHint, toda
 function merchantAnswer(state: AppState, question: string, hint: MerchantHint, today: Date): AssistantAnswer {
   const parsed = parseAmount(question);
   const amount = parsed ?? hint.defaultAmount;
+  const amountText = amount > 0 ? man(amount) : '금액 무관';
   const prevOf = (card: (typeof state.cards)[number]) => prevMonthSpend(card, state.transactions, today);
   const hits = findMerchantPerkHits(state.cards, question, hint.category, amount, prevOf);
   const results = recommendPayment(state, { amount, category: hint.category, merchant: question }, today);
@@ -457,6 +458,7 @@ function merchantAnswer(state: AppState, question: string, hint: MerchantHint, t
       0,
       ...card.benefits
         .filter((b) => b.categories.includes(hint.category))
+        .filter((b) => !b.keywords || b.keywords.length === 0)
         .map((b) => (b.earnType === 'percent' ? (b.percent ?? 0) / 100 : 0)),
     );
     if (fallbackRate > 0) {
@@ -465,7 +467,7 @@ function merchantAnswer(state: AppState, question: string, hint: MerchantHint, t
         tier: 3,
         score: fallbackRate * 100,
         reason: `기본 적립 ${(fallbackRate * 100).toFixed(2)}%`,
-        detail: `${man(amount)} 결제 시 약 ${won(amount * fallbackRate)}${rec && !rec.performance.met && rec.performance.threshold > 0 ? ` · 전월 ${man(rec.performance.threshold)} 필요` : ''}`,
+        detail: `${amountText} 결제 시 약 ${won(amount * fallbackRate)}${rec && !rec.performance.met && rec.performance.threshold > 0 ? ` · 전월 ${man(rec.performance.threshold)} 필요` : ''}`,
         source: '카드',
         warning: rec && !rec.performance.met && rec.performance.threshold > 0 ? `전월 ${man(rec.performance.threshold)} 미달이면 기본 적립이 적용되지 않을 수 있습니다.` : undefined,
         promo: promoLine,
@@ -494,13 +496,19 @@ function merchantAnswer(state: AppState, question: string, hint: MerchantHint, t
   const tier3 = rows.filter((r) => r.tier === 3 && r.score > 0);
 
   const lines: string[] = [
-    `"${hint.label}" ${man(amount)} 결제 기준입니다.${parsed ? '' : ` (금액을 말하지 않아 ${man(amount)}으로 계산)`}`,
+    amount > 0
+      ? `"${hint.label}" ${amountText} 결제 기준입니다.${parsed ? '' : ` (금액을 말하지 않아 ${amountText}으로 계산)`}`
+      : `"${hint.label}" 기준입니다. (결제금액과 무관하게 이용 조건으로 비교)`,
     '',
   ];
 
   if (tier0.length === 0) {
-    lines.push(`전용 혜택 없음 — "${hint.label}"에 직접 적용되는 가맹점 혜택이 확인되지 않았습니다.`);
-    lines.push('대신 업종·기본 적립 기준으로 아래 카드가 낫습니다.');
+    if (tier1.length === 0) {
+      lines.push(`전용 혜택 없음 — "${hint.label}"에 직접 적용되는 가맹점 혜택이 확인되지 않았습니다.`);
+      lines.push('대신 업종·기본 적립 기준으로 아래 카드가 낫습니다.');
+    } else {
+      lines.push(`가맹점 전용 혜택은 확인되지 않았습니다. 대신 네트워크·카드사 혜택이 있는 카드를 위에 두었습니다.`);
+    }
     lines.push('');
   }
 
@@ -519,8 +527,10 @@ function merchantAnswer(state: AppState, question: string, hint: MerchantHint, t
 
   section('① 가맹점 직접 혜택이 있는 카드', tier0, 4);
   section('② 네트워크·카드사 혜택이 있는 카드', tier1, 3);
-  section('③ 업종 혜택 기준', tier2, 3);
-  section('④ 기본 적립 기준', tier3, 2);
+  if (amount > 0) {
+    section('③ 업종 혜택 기준', tier2, 3);
+    section('④ 기본 적립 기준', tier3, 2);
+  }
 
   lines.push('※ 출처 라벨: [네트워크]=브랜드사, [카드사]=발급사 선택서비스, [카드]=상품 고유 혜택, [가맹점]=특정 가맹점 혜택, [직접 추가]=내가 등록한 혜택.');
   lines.push('※ 라운지·발렛처럼 횟수로 주는 혜택은 금액화하지 않고 순서만 위에 두었습니다. 예시 데이터가 있으면 ⚠표시와 함께 카드사 공식 약관을 확인하세요.');

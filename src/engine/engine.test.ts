@@ -712,6 +712,7 @@ describe('혜택 3계층(네트워크·카드사·카드) · 가맹점 · 이벤
     const answer = askAssistant('공항 라운지 되는 카드', state, today);
     expect(answer.intent).toBe('place');
     expect(answer.text).toContain('라운지');
+    expect(answer.text).toContain('결제금액과 무관');
     expect(answer.text).toMatch(/메리어트|ALL 인피니트|JADE/);
   });
 
