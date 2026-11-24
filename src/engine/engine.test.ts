@@ -367,6 +367,39 @@ describe('카드 카탈로그', () => {
   });
 });
 
+describe('카탈로그 카드 계산', () => {
+  it('iD EV 전기차 충전 5만 원은 50%·월 2만 원 한도로 20,000원', () => {
+    const state = base();
+    const card = {
+      ...catalogToCard(CATALOG_BY_ID['samsung-id-ev'], { id: 'ev-card' }),
+      manual: { prevMonthAdjustment: 300_000, currentMonthAdjustment: 0 },
+    };
+    state.cards = [card];
+    const rec = evaluateCardPayment(card, state, { amount: 50_000, category: 'ev', merchant: '테슬라 수퍼차저' }, today);
+    expect(rec.immediateKrw).toBe(20_000);
+    expect(rec.benefitLines[0].capped).toBe(true);
+  });
+
+  it('ALL 인피니트 아코르 호텔 300만 원은 통합 4,000P 한도로 120,000원', () => {
+    const state = base();
+    const card = {
+      ...catalogToCard(CATALOG_BY_ID['woori-all-infinite'], { id: 'all-card' }),
+      manual: { prevMonthAdjustment: 500_000, currentMonthAdjustment: 0 },
+    };
+    state.cards = [card];
+    const rec = evaluateCardPayment(card, state, { amount: 3_000_000, category: 'hotel', merchant: '노보텔 앰배서더 서울' }, today);
+    expect(rec.immediateKrw).toBe(120_000);
+  });
+
+  it('현대카드M은 세금·공과금도 실적에 포함한다', () => {
+    const state = base();
+    const card = catalogToCard(CATALOG_BY_ID['hyundai-m'], { id: 'm-card' });
+    state.cards = [card];
+    state.transactions = [{ id: 't', cardId: 'm-card', merchant: '국세청', category: 'tax', amount: 600_000, date: '2026-10-10', status: 'active', createdAt: today.toISOString() }];
+    expect(performanceStatus(card, state.transactions, today).met).toBe(true);
+  });
+});
+
 describe('저장 · 복원', () => {
   it('JSON 내보내기/불러오기 왕복이 유지된다', () => {
     const state = base();

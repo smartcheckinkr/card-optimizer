@@ -6,7 +6,7 @@
 
 - 프런트엔드: React 18 + TypeScript + Vite 5 + Tailwind CSS 3
 - 상태 저장: `localStorage` (JSON 내보내기/불러오기, 결제내역 CSV 가져오기)
-- 테스트: Vitest (계산 엔진·카탈로그 단위 테스트 37개)
+- 테스트: Vitest (계산 엔진·카탈로그 단위 테스트 42개)
 - PWA: `manifest.webmanifest`, 아이콘 3종, 서비스 워커(오프라인 캐시)
 
 ---
@@ -34,7 +34,7 @@ npm run preview    # 빌드 결과를 로컬 서버로 확인
 ### 테스트
 
 ```bash
-npm test           # vitest run (37개)
+npm test           # vitest run (42개)
 ```
 
 테스트 범위: 신세계백화점 30만 원 / 대한항공 공홈 150만 원 / 월 한도 초과 / 전월 실적 미달 /
@@ -87,7 +87,7 @@ projects/card-optimizer/
 │  │  ├─ benefits.ts            # 혜택 규칙 평가(정률·포인트, 한도, 조건)
 │  │  ├─ recommend.ts           # 카드 비교·순위, 분할 결제 시뮬레이션
 │  │  ├─ assistant.ts           # 규칙 기반 자연어 Q&A
-│  │  └─ engine.test.ts         # 단위 테스트 37개
+│  │  └─ engine.test.ts         # 단위 테스트 42개
 │  ├─ services/
 │  │  ├─ storage.ts             # Repository 인터페이스 + localStorage 구현 + JSON
 │  │  └─ csv.ts                 # CSV 가져오기/내보내기·템플릿
